@@ -3,14 +3,12 @@ import type { HTTPError } from 'ky';
 import type BasicRequest from '~/src/types/requestTypes/BasicRequest';
 import TotoroApiWrapper from '~/src/wrappers/TotoroApiWrapper';
 import normalizeSession from '~/src/utils/normalizeSession';
-import poem from '~/src/data/poem.json';
 
 const { data, refresh, pending } = await useFetch<{ uuid: string; imgUrl: string }>(
   '/api/scanQr',
 );
 const message = ref('');
 const snackbar = ref(false);
-const welcomeSnackbar = ref(true);
 const isLoading = ref(false);
 const session = useSession();
 const mornSignNotice = '早操签到功能仍不完善，所有已购买的已退款';
@@ -28,7 +26,6 @@ const isLoggedIn = computed(
 const polling = ref(false);
 const pollTimer = ref<ReturnType<typeof setInterval> | null>(null);
 const router = useRouter();
-const poemLines = useState('home-poem', () => poem[Math.floor(Math.random() * poem.length)]);
 
 const isKyHttpError = (error: unknown): error is HTTPError =>
   !!error &&
@@ -53,6 +50,17 @@ const fireAndForgetAppAd = (code: string) => {
   TotoroApiWrapper.getAppAd(code).catch((error) =>
     console.warn('[totoro-login] getAppAd failed', error),
   );
+};
+
+const bootstrapCredits = async (stuNumber: string) => {
+  try {
+    await Promise.all([
+      $fetch('/api/backfill/credits', { method: 'POST', body: { action: 'get', userId: stuNumber } }),
+      $fetch('/api/sunrun/credits', { method: 'POST', body: { action: 'get', userId: stuNumber } }),
+    ]);
+  } catch (error) {
+    console.warn('[credits] bootstrap failed', error);
+  }
 };
 
 const syncPendingMorningTasks = async (userId: string, token: string) => {
@@ -115,6 +123,7 @@ const handleScanned = async () => {
       stuNumber: personalInfo.stuNumber,
     };
     runPostLoginPrefetch(breq);
+    await bootstrapCredits(personalInfo.stuNumber);
 
     message.value = '登录成功，可选择入口';
     snackbar.value = true;
@@ -171,7 +180,7 @@ watch(
   },
 );
 
-const goSunRun = () => {
+const goSunRunNow = () => {
   if (!isLoggedIn.value) {
     snackbar.value = true;
     message.value = '请先扫码登录';
@@ -180,13 +189,13 @@ const goSunRun = () => {
   router.push('/scanned');
 };
 
-const goFreeRun = () => {
+const goSunRunBackfill = () => {
   if (!isLoggedIn.value) {
     snackbar.value = true;
     message.value = '请先扫码登录';
     return;
   }
-  router.push('/freerun');
+  router.push({ path: '/scanned', query: { mode: 'backfill' } });
 };
 
 const goMornSign = () => {
@@ -246,32 +255,26 @@ const goMornSign = () => {
         height="56"
         :disabled="!isLoggedIn"
         append-icon="i-mdi-run"
-        @click="goSunRun"
+        @click="goSunRunNow"
       >
-        阳光跑
+        阳光跑·立即开跑
       </VBtn>
       <VBtn
-        color="green"
+        color="blue"
         block
         height="56"
         :disabled="!isLoggedIn"
-        append-icon="i-mdi-map"
-        @click="goFreeRun"
+        append-icon="i-mdi-calendar"
+        @click="goSunRunBackfill"
       >
-        自由跑
+        阳光跑·选择日期
       </VBtn>
     </div>
     <div v-if="!isLoggedIn" class="text-caption text-gray-500">
       未登录时入口按钮会置灰，请先扫码等待自动登录。
     </div>
-    <div class="mt-4 text-center text-gray-700 font-bold text-xl whitespace-pre-line">
-      {{ poemLines?.join('\n') }}
-    </div>
     <VSnackbar v-model="snackbar" :timeout="3000">
       {{ message }}
-    </VSnackbar>
-    <VSnackbar v-model="welcomeSnackbar" :timeout="4000">
-      新增自由跑功能，欢迎使用
     </VSnackbar>
   </div>
 </template>

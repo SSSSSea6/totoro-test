@@ -12,11 +12,15 @@ const hydratedSession = computed(() => normalizeSession(session.value || {}));
 const selectValue = ref('');
 const customDate = ref('');
 const customPeriod = ref<'AM' | 'PM'>('AM');
-const showBackfill = ref(false);
+const showBackfill = ref(route.query.mode === 'backfill');
 const credits = ref(0);
 const loadingCredits = ref(false);
 const redeemDialog = ref(false);
 const redeemCode = ref('');
+const sunCredits = ref(0);
+const loadingSunCredits = ref(false);
+const sunRedeemDialog = ref(false);
+const sunRedeemCode = ref('');
 const submitted = ref(false);
 const calendarMonthOffset = ref(0);
 const completedDates = ref<string[]>([]);
@@ -34,6 +38,13 @@ const target = computed(() =>
   sunrunPaper.value?.runPointList?.find((r: any) => r.pointId === selectValue.value),
 );
 const routeList = computed(() => sunrunPaper.value?.runPointList || []);
+
+watch(
+  () => route.query.mode,
+  (mode) => {
+    showBackfill.value = mode === 'backfill';
+  },
+);
 const formatDateOnly = (date: Date) => {
   const pad = (n: number) => n.toString().padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
@@ -263,6 +274,25 @@ const hasTaskOnDate = async (targetDate: string) => {
   return Array.isArray(data) && data.length > 0;
 };
 
+const fetchSunCredits = async () => {
+  if (!session.value?.stuNumber) return;
+  loadingSunCredits.value = true;
+  try {
+    const res = await $fetch<{ success?: boolean; credits?: number; message?: string }>(
+      '/api/sunrun/credits',
+      {
+        method: 'POST',
+        body: { action: 'get', userId: session.value.stuNumber },
+      },
+    );
+    if (typeof res.credits === 'number') sunCredits.value = res.credits;
+  } catch (error) {
+    console.warn('[sunrun] fetchSunCredits failed', error);
+  } finally {
+    loadingSunCredits.value = false;
+  }
+};
+
 const fetchCredits = async () => {
   if (!session.value?.stuNumber) return;
   loadingCredits.value = true;
@@ -306,6 +336,37 @@ const handleRedeem = async () => {
   }
 };
 
+const handleSunRedeem = async () => {
+  if (!session.value?.stuNumber) return;
+  if (!sunRedeemCode.value.trim()) {
+    statusMessage.value = '请输入兑换码';
+    return;
+  }
+  loadingSunCredits.value = true;
+  try {
+    const res = await $fetch<{ success?: boolean; credits?: number; message?: string }>(
+      '/api/sunrun/credits',
+      {
+        method: 'POST',
+        body: { action: 'redeem', userId: session.value.stuNumber, code: sunRedeemCode.value.trim() },
+      },
+    );
+    if (res.success && typeof res.credits === 'number') {
+      sunCredits.value = res.credits;
+      sunRedeemDialog.value = false;
+      sunRedeemCode.value = '';
+      statusMessage.value = res.message || '兑换完成';
+    } else if (res.message) {
+      statusMessage.value = res.message;
+    }
+  } catch (error) {
+    console.warn('[sunrun] redeem failed', error);
+    statusMessage.value = '兑换失败，请稍后重试';
+  } finally {
+    loadingSunCredits.value = false;
+  }
+};
+
 const reserveBackfillCredit = async (): Promise<{ ok: boolean; message?: string }> => {
   if (!session.value?.stuNumber) {
     return { ok: false, message: '请先登录' };
@@ -329,6 +390,29 @@ const reserveBackfillCredit = async (): Promise<{ ok: boolean; message?: string 
   }
 };
 
+const reserveSunCredit = async (): Promise<{ ok: boolean; message?: string }> => {
+  if (!session.value?.stuNumber) {
+    return { ok: false, message: '请先登录' };
+  }
+  try {
+    const res = await $fetch<{ success?: boolean; credits?: number; message?: string }>(
+      '/api/sunrun/credits',
+      {
+        method: 'POST',
+        body: { action: 'consume', userId: session.value.stuNumber },
+      },
+    );
+    if (res.success && typeof res.credits === 'number') {
+      sunCredits.value = res.credits;
+      return { ok: true };
+    }
+    return { ok: false, message: res.message || '次数不足' };
+  } catch (error) {
+    console.warn('[sunrun] reserve failed', error);
+    return { ok: false, message: '次数扣减失败' };
+  }
+};
+
 const refundReservedCredit = async () => {
   if (!session.value?.stuNumber) return;
   try {
@@ -344,6 +428,24 @@ const refundReservedCredit = async () => {
     }
   } catch (error) {
     console.warn('[backfill] refund failed', error);
+  }
+};
+
+const refundSunCredit = async () => {
+  if (!session.value?.stuNumber) return;
+  try {
+    const res = await $fetch<{ success?: boolean; credits?: number; message?: string }>(
+      '/api/sunrun/credits',
+      {
+        method: 'POST',
+        body: { action: 'refund', userId: session.value.stuNumber },
+      },
+    );
+    if (typeof res.credits === 'number') {
+      sunCredits.value = res.credits;
+    }
+  } catch (error) {
+    console.warn('[sunrun] refund failed', error);
   }
 };
 
@@ -407,8 +509,10 @@ const submitJobToQueue = async () => {
   submitted.value = false;
 
   const targetDate = showBackfill.value && customDate.value ? customDate.value : getShanghaiDateStr();
-  let reservedCredit = false;
-  let reserveNeedsRefund = false;
+  let reservedBackfillCredit = false;
+  let backfillReserveNeedsRefund = false;
+  let reservedSunCredit = false;
+  let sunReserveNeedsRefund = false;
 
   try {
     const duplicated = await hasTaskOnDate(targetDate);
@@ -424,21 +528,32 @@ const submitJobToQueue = async () => {
     return;
   }
 
+  if (!showBackfill.value && session.value?.stuNumber) {
+    const reserveResult = await reserveSunCredit();
+    if (!reserveResult.ok) {
+      statusMessage.value = reserveResult.message || '次数不足';
+      isSubmitting.value = false;
+      return;
+    }
+    reservedSunCredit = true;
+    sunReserveNeedsRefund = true;
+  }
+
   if (showBackfill.value && customDate.value && session.value?.stuNumber) {
     const reserveResult = await reserveBackfillCredit();
     if (!reserveResult.ok) {
       statusMessage.value = reserveResult.message || '补跑次数不足';
-       isSubmitting.value = false;
+      isSubmitting.value = false;
       return;
     }
-    reservedCredit = true;
-    reserveNeedsRefund = true;
+    reservedBackfillCredit = true;
+    backfillReserveNeedsRefund = true;
   }
 
   statusMessage.value = '正在提交到队列...';
 
   try {
-    const jobPayload = buildJobPayload(reservedCredit);
+    const jobPayload = buildJobPayload(reservedBackfillCredit);
     const response = await fetch('/api/submitTask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -455,9 +570,13 @@ const submitJobToQueue = async () => {
       submitted.value = true;
     } else {
       statusMessage.value = `提交失败: ${data.error || '未知错误'}`;
-      if (reserveNeedsRefund) {
+      if (backfillReserveNeedsRefund) {
         await refundReservedCredit();
-        reserveNeedsRefund = false;
+        backfillReserveNeedsRefund = false;
+      }
+      if (sunReserveNeedsRefund) {
+        await refundSunCredit();
+        sunReserveNeedsRefund = false;
       }
       submitted.value = false;
     }
@@ -465,14 +584,21 @@ const submitJobToQueue = async () => {
     statusMessage.value = '提交失败';
     resultLog.value = (error as Error).message;
     submitted.value = false;
-    if (reserveNeedsRefund) {
+    if (backfillReserveNeedsRefund) {
       await refundReservedCredit();
-      reserveNeedsRefund = false;
+      backfillReserveNeedsRefund = false;
+    }
+    if (sunReserveNeedsRefund) {
+      await refundSunCredit();
+      sunReserveNeedsRefund = false;
     }
   } finally {
     isSubmitting.value = false;
-    if (reservedCredit) {
+    if (reservedBackfillCredit) {
       await fetchCredits();
+    }
+    if (reservedSunCredit) {
+      await fetchSunCredits();
     }
   }
 };
@@ -492,6 +618,7 @@ const init = async () => {
     sunrunPaper.value = data;
     const fromQuery = typeof route.query.route === 'string' ? route.query.route : '';
     selectValue.value = fromQuery || data?.runPointList?.[0]?.pointId || '';
+    await fetchSunCredits();
     await loadCompletedDates();
     await fetchCredits();
   } catch (error) {
@@ -557,6 +684,20 @@ onUnmounted(() => {
         </VBtn>
       </div>
     </div>
+
+    <VCard class="p-3 space-y-2" variant="tonal">
+      <div class="flex flex-wrap items-center gap-3">
+        <div class="font-medium">阳光跑次数：</div>
+        <div class="text-2xl font-bold text-green-600">{{ sunCredits }}</div>
+        <VBtn size="small" variant="text" :loading="loadingSunCredits" @click="fetchSunCredits"
+          >刷新</VBtn
+        >
+        <VBtn size="small" color="primary" @click="sunRedeemDialog = true">添加次数</VBtn>
+      </div>
+      <div class="text-caption text-orange-700">
+        立即开跑提交将预扣 1 次（任务失败会返还）
+      </div>
+    </VCard>
 
     <div class="space-y-3">
       <VRadioGroup v-model="showBackfill" hide-details class="space-y-1">
@@ -629,6 +770,26 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <VDialog v-model="sunRedeemDialog" max-width="420">
+      <VCard title="阳光跑次数">
+        <VCardText>
+          <VTextField
+            v-model="sunRedeemCode"
+            label="兑换码"
+            variant="outlined"
+          />
+          <div class="text-caption text-gray-700 mt-3">
+            请加微信（            ）以购买兑换码
+          </div>
+        </VCardText>
+        <VCardActions>
+          <VSpacer />
+          <VBtn variant="text" @click="sunRedeemDialog = false">取消</VBtn>
+          <VBtn color="primary" :loading="loadingSunCredits" @click="handleSunRedeem">兑换</VBtn>
+        </VCardActions>
+      </VCard>
+    </VDialog>
+
     <VDialog v-model="redeemDialog" max-width="420">
       <VCard title="充值次数">
         <VCardText>
@@ -637,53 +798,8 @@ onUnmounted(() => {
             label="兑换码"
             variant="outlined"
           />
-          <div class="text-caption text-gray-600 mt-3 mb-2">购买链接：</div>
-          <div class="flex flex-wrap gap-2">
-            <VBtn
-              size="small"
-              variant="tonal"
-              color="primary"
-              href="https://afdian.com/item/2bd8c944c9dc11f09f995254001e7c00"
-              target="_blank"
-            >
-              获取 1 次
-            </VBtn>
-            <VBtn
-              size="small"
-              variant="tonal"
-              color="primary"
-              href="https://afdian.com/item/bc3973fcc9dd11f0b56352540025c377"
-              target="_blank"
-            >
-              获取 5 次
-            </VBtn>
-            <VBtn
-              size="small"
-              variant="tonal"
-              color="primary"
-              href="https://afdian.com/item/1953981ac9de11f0b69652540025c377"
-              target="_blank"
-            >
-              获取 10 次
-            </VBtn>
-            <VBtn
-              size="small"
-              variant="tonal"
-              color="primary"
-              href="https://afdian.com/item/be460538c9de11f0adee52540025c377"
-              target="_blank"
-            >
-              获取 20 次
-            </VBtn>
-            <VBtn
-              size="small"
-              variant="tonal"
-              color="primary"
-              href="https://afdian.com/item/2f87de74c9df11f09c7c5254001e7c00"
-              target="_blank"
-            >
-              获取 30 次
-            </VBtn>
+          <div class="text-caption text-gray-700 mt-3">
+            请加微信（            ）以购买兑换码
           </div>
         </VCardText>
         <VCardActions>

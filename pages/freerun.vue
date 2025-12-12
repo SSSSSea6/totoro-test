@@ -242,7 +242,7 @@ watch(
         <VCardText>
           <VTextField v-model="redeemCode" label="请输入兑换码" variant="outlined" />
           <div class="text-sm text-primary mt-2 cursor-pointer" @click="redeemLinksDialog = true">
-            获取兑换码
+            购买兑换码
           </div>
         </VCardText>
         <VCardActions>
@@ -254,63 +254,10 @@ watch(
 
     <VDialog v-model="redeemLinksDialog" max-width="360">
       <VCard>
-        <VCardTitle>选择公里数</VCardTitle>
+        <VCardTitle>购买兑换码</VCardTitle>
         <VCardText class="space-y-2">
-          <div class="flex flex-wrap gap-2">
-            <VBtn
-              color="primary"
-              variant="tonal"
-              size="small"
-              href="https://afdian.com/item/49906c22d35911f08cc252540025c377"
-              target="_blank"
-            >
-              1 公里
-            </VBtn>
-            <VBtn
-              color="primary"
-              variant="tonal"
-              size="small"
-              href="https://afdian.com/item/921ce0fad35a11f09ba052540025c377"
-              target="_blank"
-            >
-              2 公里
-            </VBtn>
-            <VBtn
-              color="primary"
-              variant="tonal"
-              size="small"
-              href="https://afdian.com/item/ca26396ad35a11f0bcf552540025c377"
-              target="_blank"
-            >
-              5 公里
-            </VBtn>
-            <VBtn
-              color="primary"
-              variant="tonal"
-              size="small"
-              href="https://afdian.com/item/9a543132d35b11f0b6cc52540025c377"
-              target="_blank"
-            >
-              10 公里
-            </VBtn>
-            <VBtn
-              color="primary"
-              variant="tonal"
-              size="small"
-              href="https://afdian.com/item/de3d7502d35b11f0b1c152540025c377"
-              target="_blank"
-            >
-              30 公里
-            </VBtn>
-            <VBtn
-              color="primary"
-              variant="tonal"
-              size="small"
-              href="https://afdian.com/item/339ed2cad35c11f0bdf25254001e7c00"
-              target="_blank"
-            >
-              3.2 公里
-            </VBtn>
+          <div class="text-body-2 text-gray-700">
+            请加微信（            ）以购买兑换码
           </div>
         </VCardText>
         <VCardActions>
@@ -324,4 +271,3 @@ watch(
     </VSnackbar>
   </div>
 </template>
-
