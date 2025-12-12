@@ -700,10 +700,6 @@ onUnmounted(() => {
     </VCard>
 
     <div class="space-y-3">
-      <VRadioGroup v-if="!showBackfill" v-model="showBackfill" hide-details class="space-y-1">
-        <VRadio label="立即开跑" :value="false" />
-        <VRadio label="选择日期（仅本学期）" :value="true" />
-      </VRadioGroup>
       <div v-if="showBackfill" class="space-y-3">
         <div class="font-medium text-body-1">阳光跑补跑（仅本学期）</div>
         <VCard class="p-3 space-y-2" variant="tonal">
