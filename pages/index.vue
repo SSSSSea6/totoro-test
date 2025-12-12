@@ -235,7 +235,6 @@ const goMornSign = () => {
 </script>
 <template>
   <div class="flex flex-col items-center gap-4 py-10">
-    <h1 class="text-2xl font-bold text-primary">信息本该自由，学习本应简单</h1>
     <p class="text-center text-red-500">在每天22:50后提交跑步会失败。</p>
     <VCard :height="220" :width="220" class="flex items-center justify-center">
       <img v-if="data?.imgUrl" :src="data.imgUrl" class="w-100" referrerpolicy="no-referrer" />
