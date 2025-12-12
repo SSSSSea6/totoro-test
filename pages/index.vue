@@ -257,7 +257,7 @@ const goMornSign = () => {
         append-icon="i-mdi-run"
         @click="goSunRunNow"
       >
-        阳光跑·立即开跑
+        阳光跑
       </VBtn>
       <VBtn
         color="blue"
@@ -267,7 +267,7 @@ const goMornSign = () => {
         append-icon="i-mdi-calendar"
         @click="goSunRunBackfill"
       >
-        阳光跑·选择日期
+        阳光跑补跑
       </VBtn>
     </div>
     <div v-if="!isLoggedIn" class="text-caption text-gray-500">

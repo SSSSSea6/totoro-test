@@ -685,7 +685,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <VCard class="p-3 space-y-2" variant="tonal">
+    <VCard v-if="!showBackfill" class="p-3 space-y-2" variant="tonal">
       <div class="flex flex-wrap items-center gap-3">
         <div class="font-medium">阳光跑次数：</div>
         <div class="text-2xl font-bold text-green-600">{{ sunCredits }}</div>
@@ -695,7 +695,7 @@ onUnmounted(() => {
         <VBtn size="small" color="primary" @click="sunRedeemDialog = true">添加次数</VBtn>
       </div>
       <div class="text-caption text-orange-700">
-        立即开跑提交将预扣 1 次（任务失败会返还）
+        仅用于“阳光跑”，提交将预扣 1 次（任务失败会返还）
       </div>
     </VCard>
 
