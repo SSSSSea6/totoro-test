@@ -776,7 +776,7 @@ onUnmounted(() => {
             variant="outlined"
           />
           <div class="text-caption text-gray-700 mt-3">
-            请加微信（            ）以购买兑换码
+            请加微信 OOOXKC 或 QQ 1538213150 购买兑换码
           </div>
         </VCardText>
         <VCardActions>
@@ -796,7 +796,7 @@ onUnmounted(() => {
             variant="outlined"
           />
           <div class="text-caption text-gray-700 mt-3">
-            请加微信（            ）以购买兑换码
+            请加微信 OOOXKC 或 QQ 1538213150 购买兑换码
           </div>
         </VCardText>
         <VCardActions>
