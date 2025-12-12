@@ -60,10 +60,12 @@ const generateRunReq = async ({
     minSecond: Number(minTime) * 60,
     maxSecond: Number(maxTime) * 60,
   };
-  const avgSecond = minSecond + maxSecond / 2;
-  const waitSecond = Math.floor(
-    normalRandom(minSecond + maxSecond / 2, (maxSecond - avgSecond) / 3),
-  );
+  // 在最低时间基础上 +7~+12 分钟随机，超出 maxSecond 时做上限截断
+  const lowerBound = minSecond + 7 * 60;
+  const upperBound = minSecond + 12 * 60;
+  const cappedUpper = Math.max(lowerBound, Math.min(upperBound, maxSecond));
+  const range = Math.max(1, cappedUpper - lowerBound);
+  const waitSecond = Math.floor(lowerBound + Math.random() * range);
 
   const diffMs = offsetDiffMs();
   const now = new Date();
