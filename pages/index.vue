@@ -236,10 +236,21 @@ const goMornSign = () => {
 <template>
   <div class="flex flex-col items-center gap-4 py-10">
     <p class="text-center text-red-500">在每天22:50后提交跑步会失败。</p>
-    <VCard :height="220" :width="220" class="flex items-center justify-center">
-      <img v-if="data?.imgUrl" :src="data.imgUrl" class="w-100" referrerpolicy="no-referrer" />
-      <div v-else class="text-center text-body-2 text-gray-500">正在加载二维码...</div>
-    </VCard>
+    <div class="relative">
+      <VCard
+        :height="220"
+        :width="220"
+        class="flex items-center justify-center overflow-hidden rounded-lg"
+      >
+        <img v-if="data?.imgUrl" :src="data.imgUrl" class="w-100" referrerpolicy="no-referrer" />
+        <div v-else class="text-center text-body-2 text-gray-500">正在加载二维码...</div>
+      </VCard>
+      <div
+        class="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-black/70 px-4 text-center text-white"
+      >
+        正在升级，请稍后使用
+      </div>
+    </div>
     <div class="flex items-center gap-3">
       <VBtn variant="text" color="secondary" :loading="pending" @click="refresh">
         刷新二维码
