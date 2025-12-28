@@ -15,20 +15,48 @@ export default defineEventHandler(async (event) => {
   }
 
   const supabase = getSupabaseAdminClient();
-  const ensureInitialRow = async () => {
-    const { data: inserted, error: upsertError } = await supabase
+  const ensureInitialRows = async () => {
+    const now = new Date().toISOString();
+    const { data: sunInserted, error: sunErr } = await supabase
       .from('sunrun_credits')
-      .upsert({
-        user_id: userId,
-        credits: INITIAL_BONUS,
-        updated_at: new Date().toISOString(),
-      })
+      .upsert({ user_id: userId, credits: INITIAL_BONUS, updated_at: now })
       .select('credits')
       .single();
-    if (upsertError) {
-      return { error: upsertError, credits: 0 };
+
+    const { error: backfillErr } = await supabase
+      .from('backfill_run_credits')
+      .upsert({ user_id: userId, credits: INITIAL_BONUS, updated_at: now });
+
+    return { error: sunErr || backfillErr, credits: sunInserted?.credits ?? INITIAL_BONUS };
+  };
+
+  const ensureBackfillExists = async () => {
+    const { data, error } = await supabase
+      .from('backfill_run_credits')
+      .select('credits')
+      .eq('user_id', userId)
+      .single();
+
+    if (error && error.code !== 'PGRST116') {
+      return { success: false, message: error.message };
     }
-    return { error: null, credits: inserted?.credits ?? INITIAL_BONUS };
+
+    if (error?.code === 'PGRST116' || !data) {
+      const { error: upsertError } = await supabase
+        .from('backfill_run_credits')
+        .upsert({
+          user_id: userId,
+          credits: INITIAL_BONUS,
+          updated_at: new Date().toISOString(),
+        })
+        .single();
+
+      if (upsertError) {
+        return { success: false, message: upsertError.message };
+      }
+    }
+
+    return { success: true };
   };
 
   if (action === 'get') {
@@ -57,9 +85,12 @@ export default defineEventHandler(async (event) => {
         return { success: false, message: upsertError.message };
       }
 
+      // 同步创建补跑表
+      await ensureBackfillExists();
       return { success: true, credits: inserted?.credits ?? INITIAL_BONUS };
     }
 
+    await ensureBackfillExists();
     return { success: true, credits: data?.credits ?? 0 };
   }
 
@@ -75,7 +106,7 @@ export default defineEventHandler(async (event) => {
     }
 
     if (error?.code === 'PGRST116' || !data) {
-      const init = await ensureInitialRow();
+      const init = await ensureInitialRows();
       if (init.error) {
         return { success: false, message: init.error.message };
       }
@@ -174,6 +205,8 @@ export default defineEventHandler(async (event) => {
       return { success: false, message: '兑换失败，请稍后重试' };
     }
 
+    // 同步补跑表存在性
+    await ensureBackfillExists();
     return { success: true, message: `成功兑换 ${codeData.amount ?? 1} 次`, credits: newCredits };
   }
 
