@@ -26,6 +26,8 @@ const sunrunPaper = useSunRunPaper();
 const session = useSession();
 const route = useRoute();
 const hydratedSession = computed(() => normalizeSession(session.value || {}));
+const SEMESTER_SUBMIT_GRACE_DAYS = 5;
+const SEMESTER_BLOCK_MESSAGE = '本学期已结束或新学期未开始，请等待新学期开始后再跑步';
 
 const selectValue = ref('');
 const showBackfill = ref(route.query.mode === 'backfill');
@@ -95,6 +97,18 @@ const startDateObj = computed(() => {
 const endDateObj = computed(() => {
   const raw = sunrunPaper.value?.endDate;
   return raw ? new Date(`${raw}T23:59:59+08:00`) : null;
+});
+const submitBlockedBySemester = computed(() => {
+  const start = startDateObj.value;
+  const end = endDateObj.value;
+  if (!start || !end) return false;
+
+  const now = new Date();
+  if (now < start) return true;
+
+  const graceEnd = new Date(end.getTime());
+  graceEnd.setDate(graceEnd.getDate() + SEMESTER_SUBMIT_GRACE_DAYS);
+  return now > graceEnd;
 });
 
 const startMonthFloor = computed(() => {
@@ -707,6 +721,12 @@ const submitSunRunJob = async () => {
 
 const submitJobs = async () => {
   if (isSubmitting.value) return;
+  if (submitBlockedBySemester.value) {
+    submitted.value = false;
+    statusMessage.value = SEMESTER_BLOCK_MESSAGE;
+    resultLog.value = '';
+    return;
+  }
   isSubmitting.value = true;
   try {
     if (showBackfill.value) {
