@@ -1,6 +1,12 @@
 import { getSupabaseAdminClient, isSupabaseConfigured } from '../../utils/supabaseAdminClient';
 
-const INITIAL_BONUS = 1; // 新用户首次查询自动赠送 1 次
+const INITIAL_BONUS = 1;
+
+const normalizeCount = (raw: unknown) => {
+  const num = Number(raw);
+  if (!Number.isFinite(num)) return 1;
+  return Math.max(1, Math.floor(num));
+};
 
 export default defineEventHandler(async (event) => {
   if (!isSupabaseConfigured()) {
@@ -9,12 +15,14 @@ export default defineEventHandler(async (event) => {
 
   const body = await readBody(event);
   const { action, userId, code } = body || {};
+  const count = normalizeCount((body || {}).count);
 
   if (!userId) {
     return { success: false, message: '缺少 userId' };
   }
 
   const supabase = getSupabaseAdminClient();
+
   const ensureInitialRows = async () => {
     const now = new Date().toISOString();
     const { data: backInserted, error: backErr } = await supabase
@@ -27,13 +35,11 @@ export default defineEventHandler(async (event) => {
       .select('credits')
       .single();
 
-    const { error: sunErr } = await supabase
-      .from('sunrun_credits')
-      .upsert({
-        user_id: userId,
-        credits: INITIAL_BONUS,
-        updated_at: now,
-      });
+    const { error: sunErr } = await supabase.from('sunrun_credits').upsert({
+      user_id: userId,
+      credits: INITIAL_BONUS,
+      updated_at: now,
+    });
 
     return { error: backErr || sunErr, credits: backInserted?.credits ?? INITIAL_BONUS };
   };
@@ -120,12 +126,16 @@ export default defineEventHandler(async (event) => {
       data = { credits: init.credits };
     }
 
-    const currentCredits = data?.credits ?? 0;
-    if (currentCredits < 1) {
-      return { success: false, message: '补跑次数不足' };
+    const currentCredits = Number(data?.credits ?? 0);
+    if (currentCredits < count) {
+      return {
+        success: false,
+        message: `补跑次数不足（需 ${count}，剩余 ${currentCredits}）`,
+        credits: currentCredits,
+      };
     }
 
-    const nextCredits = currentCredits - 1;
+    const nextCredits = currentCredits - count;
     const { error: updateError } = await supabase
       .from('backfill_run_credits')
       .update({ credits: nextCredits, updated_at: new Date().toISOString() })
@@ -135,7 +145,7 @@ export default defineEventHandler(async (event) => {
       return { success: false, message: updateError.message };
     }
 
-    return { success: true, credits: nextCredits };
+    return { success: true, credits: nextCredits, count };
   }
 
   if (action === 'refund') {
@@ -149,21 +159,19 @@ export default defineEventHandler(async (event) => {
       return { success: false, message: error.message };
     }
 
-    const currentCredits = data?.credits ?? 0;
-    const nextCredits = currentCredits + 1;
-    const { error: upsertError } = await supabase
-      .from('backfill_run_credits')
-      .upsert({
-        user_id: userId,
-        credits: nextCredits,
-        updated_at: new Date().toISOString(),
-      });
+    const currentCredits = Number(data?.credits ?? 0);
+    const nextCredits = currentCredits + count;
+    const { error: upsertError } = await supabase.from('backfill_run_credits').upsert({
+      user_id: userId,
+      credits: nextCredits,
+      updated_at: new Date().toISOString(),
+    });
 
     if (upsertError) {
       return { success: false, message: upsertError.message };
     }
 
-    return { success: true, credits: nextCredits };
+    return { success: true, credits: nextCredits, count };
   }
 
   if (action === 'redeem') {
@@ -201,8 +209,8 @@ export default defineEventHandler(async (event) => {
       return { success: false, message: userError.message };
     }
 
-    const currentCredits = userData?.credits ?? INITIAL_BONUS;
-    const newCredits = currentCredits + (codeData.amount ?? 1);
+    const currentCredits = Number(userData?.credits ?? INITIAL_BONUS);
+    const newCredits = currentCredits + Number(codeData.amount ?? 1);
 
     const { error: upsertError } = await supabase
       .from('backfill_run_credits')
@@ -212,7 +220,6 @@ export default defineEventHandler(async (event) => {
       return { success: false, message: '兑换失败，请稍后重试' };
     }
 
-    // 同步阳光跑表存在性
     await ensureSunrunExists();
     return { success: true, message: `成功兑换 ${codeData.amount ?? 1} 次`, credits: newCredits };
   }
