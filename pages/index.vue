@@ -52,11 +52,17 @@ const fireAndForgetAppAd = (code: string) => {
   );
 };
 
-const bootstrapCredits = async (stuNumber: string) => {
+const bootstrapCredits = async (stuNumber: string, token: string) => {
   try {
     await Promise.all([
-      $fetch('/api/backfill/credits', { method: 'POST', body: { action: 'get', userId: stuNumber } }),
-      $fetch('/api/sunrun/credits', { method: 'POST', body: { action: 'get', userId: stuNumber } }),
+      $fetch('/api/backfill/credits', {
+        method: 'POST',
+        body: { action: 'get', userId: stuNumber, token },
+      }),
+      $fetch('/api/sunrun/credits', {
+        method: 'POST',
+        body: { action: 'get', userId: stuNumber, token },
+      }),
     ]);
   } catch (error) {
     console.warn('[credits] bootstrap failed', error);
@@ -123,7 +129,7 @@ const handleScanned = async () => {
       stuNumber: personalInfo.stuNumber,
     };
     runPostLoginPrefetch(breq);
-    await bootstrapCredits(personalInfo.stuNumber);
+    await bootstrapCredits(personalInfo.stuNumber, lesseeServer.token);
 
     message.value = '登录成功，可选择入口';
     snackbar.value = true;

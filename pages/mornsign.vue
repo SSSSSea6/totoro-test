@@ -188,7 +188,11 @@ const fetchCredits = async () => {
   try {
     const res = await $fetch<CreditsResponse>('/api/user/credits', {
       method: 'POST',
-      body: { action: 'get', userId: hydratedSession.value.stuNumber },
+      body: {
+        action: 'get',
+        userId: hydratedSession.value.stuNumber,
+        token: hydratedSession.value.token,
+      },
     });
     if (typeof res.credits === 'number') credits.value = res.credits;
     if (res.success === false) notify('获取余额失败');
@@ -266,6 +270,7 @@ const handleRedeem = async () => {
       body: {
         action: 'redeem',
         userId: hydratedSession.value.stuNumber,
+        token: hydratedSession.value.token,
         code: redeemCode.value.trim(),
       },
     });

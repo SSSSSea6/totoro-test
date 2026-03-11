@@ -66,6 +66,7 @@ const fetchCredits = async () => {
     const res = await $fetch<CreditsResponse>('/api/freerun/credits', {
       method: 'GET',
       query: { userId: hydratedSession.value.stuNumber },
+      headers: { 'x-totoro-token': hydratedSession.value.token || '' },
     });
     if (res.success) {
       credits.value = res.credits ?? 0;
@@ -92,6 +93,7 @@ const handleRedeem = async () => {
       body: {
         code: redeemCode.value.trim(),
         userId: hydratedSession.value.stuNumber,
+        token: hydratedSession.value.token,
       },
     });
     if (res.success) {

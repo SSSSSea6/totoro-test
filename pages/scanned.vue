@@ -292,12 +292,12 @@ const hasTaskToday = async () => {
 };
 
 const fetchSunCredits = async () => {
-  if (!session.value?.stuNumber) return;
+  if (!session.value?.stuNumber || !session.value?.token) return;
   loadingSunCredits.value = true;
   try {
     const res = await $fetch<{ success?: boolean; credits?: number }>('/api/sunrun/credits', {
       method: 'POST',
-      body: { action: 'get', userId: session.value.stuNumber },
+      body: { action: 'get', userId: session.value.stuNumber, token: session.value.token },
     });
     if (typeof res.credits === 'number') {
       sunCredits.value = res.credits;
@@ -310,12 +310,12 @@ const fetchSunCredits = async () => {
 };
 
 const fetchCredits = async () => {
-  if (!session.value?.stuNumber) return;
+  if (!session.value?.stuNumber || !session.value?.token) return;
   loadingCredits.value = true;
   try {
     const res = await $fetch<{ success?: boolean; credits?: number }>('/api/backfill/credits', {
       method: 'POST',
-      body: { action: 'get', userId: session.value.stuNumber },
+      body: { action: 'get', userId: session.value.stuNumber, token: session.value.token },
     });
     if (typeof res.credits === 'number') {
       credits.value = res.credits;
@@ -328,14 +328,19 @@ const fetchCredits = async () => {
 };
 
 const handleRedeem = async () => {
-  if (!session.value?.stuNumber || !redeemCode.value.trim()) return;
+  if (!session.value?.stuNumber || !session.value?.token || !redeemCode.value.trim()) return;
   loadingCredits.value = true;
   try {
     const res = await $fetch<{ success?: boolean; credits?: number; message?: string }>(
       '/api/backfill/credits',
       {
         method: 'POST',
-        body: { action: 'redeem', userId: session.value.stuNumber, code: redeemCode.value.trim() },
+        body: {
+          action: 'redeem',
+          userId: session.value.stuNumber,
+          token: session.value.token,
+          code: redeemCode.value.trim(),
+        },
       },
     );
     if (res.success && typeof res.credits === 'number') {
@@ -355,7 +360,7 @@ const handleRedeem = async () => {
 };
 
 const handleSunRedeem = async () => {
-  if (!session.value?.stuNumber || !sunRedeemCode.value.trim()) {
+  if (!session.value?.stuNumber || !session.value?.token || !sunRedeemCode.value.trim()) {
     statusMessage.value = '请输入兑换码';
     return;
   }
@@ -365,7 +370,12 @@ const handleSunRedeem = async () => {
       '/api/sunrun/credits',
       {
         method: 'POST',
-        body: { action: 'redeem', userId: session.value.stuNumber, code: sunRedeemCode.value.trim() },
+        body: {
+          action: 'redeem',
+          userId: session.value.stuNumber,
+          token: session.value.token,
+          code: sunRedeemCode.value.trim(),
+        },
       },
     );
     if (res.success && typeof res.credits === 'number') {
@@ -381,84 +391,6 @@ const handleSunRedeem = async () => {
     statusMessage.value = '兑换失败，请稍后重试';
   } finally {
     loadingSunCredits.value = false;
-  }
-};
-
-const reserveBackfillCredits = async (count: number): Promise<{ ok: boolean; message?: string }> => {
-  if (!session.value?.stuNumber) return { ok: false, message: '请先登录' };
-  try {
-    const res = await $fetch<{ success?: boolean; credits?: number; message?: string }>(
-      '/api/backfill/credits',
-      {
-        method: 'POST',
-        body: { action: 'consume', userId: session.value.stuNumber, count },
-      },
-    );
-    if (res.success && typeof res.credits === 'number') {
-      credits.value = res.credits;
-      return { ok: true };
-    }
-    return { ok: false, message: res.message || '补跑次数不足' };
-  } catch (error) {
-    console.warn('[backfill] reserve failed', error);
-    return { ok: false, message: '补跑次数扣减失败' };
-  }
-};
-
-const refundBackfillCredits = async (count: number): Promise<{ ok: boolean; message?: string }> => {
-  if (!session.value?.stuNumber) return { ok: false, message: '请先登录' };
-  try {
-    const res = await $fetch<{ success?: boolean; credits?: number; message?: string }>(
-      '/api/backfill/credits',
-      {
-        method: 'POST',
-        body: { action: 'refund', userId: session.value.stuNumber, count },
-      },
-    );
-    if (res.success && typeof res.credits === 'number') {
-      credits.value = res.credits;
-      return { ok: true };
-    }
-    return { ok: false, message: res.message || '返还失败' };
-  } catch (error) {
-    console.warn('[backfill] refund failed', error);
-    return { ok: false, message: '返还失败' };
-  }
-};
-
-const reserveSunCredit = async (): Promise<{ ok: boolean; message?: string }> => {
-  if (!session.value?.stuNumber) return { ok: false, message: '请先登录' };
-  try {
-    const res = await $fetch<{ success?: boolean; credits?: number; message?: string }>(
-      '/api/sunrun/credits',
-      {
-        method: 'POST',
-        body: { action: 'consume', userId: session.value.stuNumber },
-      },
-    );
-    if (res.success && typeof res.credits === 'number') {
-      sunCredits.value = res.credits;
-      return { ok: true };
-    }
-    return { ok: false, message: res.message || '次数不足' };
-  } catch (error) {
-    console.warn('[sunrun] reserve failed', error);
-    return { ok: false, message: '次数扣减失败' };
-  }
-};
-
-const refundSunCredit = async (): Promise<void> => {
-  if (!session.value?.stuNumber) return;
-  try {
-    const res = await $fetch<{ success?: boolean; credits?: number }>('/api/sunrun/credits', {
-      method: 'POST',
-      body: { action: 'refund', userId: session.value.stuNumber },
-    });
-    if (typeof res.credits === 'number') {
-      sunCredits.value = res.credits;
-    }
-  } catch (error) {
-    console.warn('[sunrun] refund failed', error);
   }
 };
 
@@ -596,16 +528,8 @@ const submitBackfillJobs = async () => {
     resultLog.value = duplicatedDates.join('、');
     return;
   }
-
-  const reserveRes = await reserveBackfillCredits(dates.length);
-  if (!reserveRes.ok) {
-    statusMessage.value = reserveRes.message || '补跑次数不足';
-    return;
-  }
-
-  let needImmediateRefund = dates.length;
   const createdTaskIds: number[] = [];
-  const failedDates: string[] = [];
+  const failedDetails: string[] = [];
 
   statusMessage.value = `正在提交 ${dates.length} 个任务到队列...`;
 
@@ -619,20 +543,8 @@ const submitBackfillJobs = async () => {
       const submitRes = await submitTaskToQueue(payload);
       if (submitRes.ok && typeof submitRes.taskId === 'number') {
         createdTaskIds.push(submitRes.taskId);
-        needImmediateRefund -= 1;
       } else {
-        failedDates.push(date);
-      }
-    }
-
-    if (needImmediateRefund > 0) {
-      const refundRes = await refundBackfillCredits(needImmediateRefund);
-      if (!refundRes.ok) {
-        statusMessage.value = '部分任务提交失败，且返还次数失败，请尽快联系管理员处理';
-        resultLog.value = refundRes.message || '自动返还失败';
-        submitted.value = false;
-        taskIds.value = createdTaskIds;
-        return;
+        failedDetails.push(`${date}: ${submitRes.error || '入队失败'}`);
       }
     }
 
@@ -641,29 +553,20 @@ const submitBackfillJobs = async () => {
       submitted.value = true;
       selectedDates.value = [];
       statusMessage.value = `已成功入队 ${createdTaskIds.length} 个任务`;
-      if (failedDates.length > 0) {
-        resultLog.value = `以下日期入队失败并已返还次数：${failedDates.join('、')}`;
+      if (failedDetails.length > 0) {
+        resultLog.value = `以下日期入队失败（未成功入队的不扣次数）：${failedDetails.join('；')}`;
       } else {
         resultLog.value =
           '每个任务失败后会自动重试 2 次，若 3 次仍失败，worker 会自动返还该任务扣减次数。';
       }
     } else {
       submitted.value = false;
-      statusMessage.value = '提交失败，次数已返还';
-      resultLog.value = failedDates.length ? failedDates.join('、') : '未成功创建任务';
+      statusMessage.value = '提交失败，未成功创建任务';
+      resultLog.value = failedDetails.length ? failedDetails.join('；') : '未知错误';
     }
   } catch (error) {
-    if (needImmediateRefund > 0) {
-      const refundRes = await refundBackfillCredits(needImmediateRefund);
-      if (!refundRes.ok) {
-        statusMessage.value = '提交异常且返还失败，请尽快联系管理员处理';
-        resultLog.value = refundRes.message || '自动返还失败';
-        submitted.value = false;
-        return;
-      }
-    }
     submitted.value = false;
-    statusMessage.value = '提交异常，未入队任务次数已返还';
+    statusMessage.value = '提交异常';
     resultLog.value = (error as Error).message;
   } finally {
     await fetchCredits();
@@ -687,14 +590,6 @@ const submitSunRunJob = async () => {
     statusMessage.value = '今天已有任务在队列或已完成，请勿重复提交';
     return;
   }
-
-  const reserveRes = await reserveSunCredit();
-  if (!reserveRes.ok) {
-    statusMessage.value = reserveRes.message || '次数不足';
-    return;
-  }
-
-  let needRefund = true;
   try {
     const payload = buildJobPayload({ customDate: null, customPeriod: null, reservedCredit: true });
     const submitRes = await submitTaskToQueue(payload);
@@ -703,7 +598,6 @@ const submitSunRunJob = async () => {
       return;
     }
 
-    needRefund = false;
     taskIds.value = [submitRes.taskId];
     submitted.value = true;
     statusMessage.value = '任务已入队';
@@ -712,9 +606,6 @@ const submitSunRunJob = async () => {
     statusMessage.value = '提交失败';
     resultLog.value = (error as Error).message;
   } finally {
-    if (needRefund) {
-      await refundSunCredit();
-    }
     await fetchSunCredits();
   }
 };

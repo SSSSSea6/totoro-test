@@ -1,6 +1,7 @@
 ﻿import TotoroApiWrapper from '~~/src/wrappers/TotoroApiWrapper';
 import freeRunRoutes from '~~/src/data/freeRunRoutes';
 import { getSupabaseAdminClient, isSupabaseConfigured } from '../../utils/supabaseAdminClient';
+import { adjustCreditsWithRetry, authenticateCreditUser } from '../../utils/creditSecurity';
 
 const freerunDebug = process.env.FREERUN_DEBUG === 'true';
 const safe = (obj: any) => {
@@ -221,6 +222,12 @@ export default defineEventHandler(async (event) => {
     return { success: false, message: '缺少必要参数' };
   }
 
+  const auth = await authenticateCreditUser(stuNumber, token);
+  if (!auth.success) {
+    return { success: false, message: auth.message };
+  }
+  const userId = auth.userId;
+
   const baseKm = Number(km) || 1.01;
   if (baseKm < 0.5 || baseKm > 3.2) {
     return { success: false, message: '长度不合法，仅支持 0.5~3.2km' };
@@ -229,73 +236,26 @@ export default defineEventHandler(async (event) => {
   const maybeConsumeFreeRunCredit = async (consumeKm: number) => {
     if (!isSupabaseConfigured()) return { ok: true, remaining: null as number | null };
     const supabase = getSupabaseAdminClient();
-    const { data, error } = await supabase
-      .from('free_run_credits')
-      .select('credits')
-      .eq('user_id', stuNumber)
-      .single();
+    const deduction = await adjustCreditsWithRetry({
+      supabase,
+      table: 'free_run_credits',
+      userId,
+      delta: -consumeKm,
+      initialCredits: 1,
+      minCredits: 0,
+    });
 
-    if (error && error.code !== 'PGRST116') {
-      return { ok: false, message: `公里查询失败: ${error.message}` };
-    }
-
-    // 首次使用，自动赠送 1 公里
-    if (error?.code === 'PGRST116' || data == null) {
-      const { data: inserted, error: insertError } = await supabase
-        .from('free_run_credits')
-        .upsert({
-          user_id: stuNumber,
-          credits: 1,
-          updated_at: new Date().toISOString(),
-        })
-        .select('credits')
-        .single();
-
-      if (insertError) {
-        return { ok: false, message: `公里初始化失败: ${insertError.message}` };
-      }
-      if ((inserted?.credits ?? 0) < consumeKm) {
+    if (!deduction.success) {
+      if (deduction.insufficient) {
         return {
           ok: false,
-          message: `自由跑公里数不足（需 ${consumeKm} km，剩余 ${Number(inserted?.credits ?? 0).toFixed(2)} km）`,
+          message: `自由跑公里数不足（需 ${consumeKm} km，剩余 ${Number(deduction.credits ?? 0).toFixed(2)} km）`,
         };
       }
-      const nextInitCredits = Number(((inserted?.credits ?? 0) - consumeKm).toFixed(2));
-      const { error: updateInitError } = await supabase
-        .from('free_run_credits')
-        .upsert({
-          user_id: stuNumber,
-          credits: nextInitCredits,
-          updated_at: new Date().toISOString(),
-        });
-      if (updateInitError) {
-        return { ok: false, message: `公里扣减失败: ${updateInitError.message}` };
-      }
-      return { ok: true, remaining: nextInitCredits };
+      return { ok: false, message: `公里扣减失败: ${deduction.message}` };
     }
 
-    const currentCredits = data?.credits ?? 0;
-    if (currentCredits < consumeKm) {
-      return {
-        ok: false,
-        message: `自由跑公里数不足（需 ${consumeKm} km，剩余 ${Number(currentCredits).toFixed(2)} km）`,
-      };
-    }
-
-    const nextCredits = Number((currentCredits - consumeKm).toFixed(2));
-    const { error: updateError } = await supabase
-      .from('free_run_credits')
-      .upsert({
-        user_id: stuNumber,
-        credits: nextCredits,
-        updated_at: new Date().toISOString(),
-      });
-
-    if (updateError) {
-      return { ok: false, message: `公里扣减失败: ${updateError.message}` };
-    }
-
-    return { ok: true, remaining: nextCredits };
+    return { ok: true, remaining: deduction.credits };
   };
 
   const quota = await maybeConsumeFreeRunCredit(baseKm);

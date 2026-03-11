@@ -1,4 +1,5 @@
 import { getSupabaseAdminClient, isSupabaseConfigured } from '../../utils/supabaseAdminClient';
+import { adjustCreditsWithRetry, authenticateCreditUser } from '../../utils/creditSecurity';
 
 export default defineEventHandler(async (event) => {
   if (!isSupabaseConfigured()) {
@@ -12,7 +13,13 @@ export default defineEventHandler(async (event) => {
     return { success: false, message: '缺少必要参数' };
   }
 
+  const auth = await authenticateCreditUser(userId, token);
+  if (!auth.success) {
+    return { success: false, message: auth.message };
+  }
+
   const supabase = getSupabaseAdminClient();
+  const validatedUserId = auth.userId;
 
   const parsed = new Date(scheduledTime);
   if (Number.isNaN(parsed.getTime())) {
@@ -29,7 +36,7 @@ export default defineEventHandler(async (event) => {
   const { data: existsTask, error: existsError } = await supabase
     .from('morning_sign_tasks')
     .select('id')
-    .eq('user_id', userId)
+    .eq('user_id', validatedUserId)
     .gte('scheduled_time', startOfDay.toISOString())
     .lte('scheduled_time', endOfDay.toISOString())
     .limit(1)
@@ -39,32 +46,24 @@ export default defineEventHandler(async (event) => {
     return { success: false, message: '同一天只能预约一次' };
   }
 
-  const { data: creditData, error: creditError } = await supabase
-    .from('user_credits')
-    .select('credits')
-    .eq('user_id', userId)
-    .single();
+  const deduct = await adjustCreditsWithRetry({
+    supabase,
+    table: 'user_credits',
+    userId: validatedUserId,
+    delta: -1,
+    initialCredits: 1,
+    minCredits: 0,
+  });
 
-  if (creditError && creditError.code !== 'PGRST116') {
-    return { success: false, message: '读取余额失败' };
-  }
-
-  const credits = creditData?.credits ?? 0;
-  if (credits < 1) {
-    return { success: false, message: '余额不足' };
-  }
-
-  const { error: deductError } = await supabase
-    .from('user_credits')
-    .update({ credits: credits - 1, updated_at: new Date().toISOString() })
-    .eq('user_id', userId);
-
-  if (deductError) {
-    return { success: false, message: '扣费失败，请重试' };
+  if (!deduct.success) {
+    if (deduct.insufficient) {
+      return { success: false, message: '余额不足' };
+    }
+    return { success: false, message: `扣费失败，请重试: ${deduct.message}` };
   }
 
   const { error: insertError } = await supabase.from('morning_sign_tasks').insert({
-    user_id: userId,
+    user_id: validatedUserId,
     token,
     device_info: deviceInfo || null,
     sign_point: signPoint,
@@ -73,7 +72,16 @@ export default defineEventHandler(async (event) => {
   });
 
   if (insertError) {
-    return { success: false, message: `预约失败: ${insertError.message}` };
+    const refund = await adjustCreditsWithRetry({
+      supabase,
+      table: 'user_credits',
+      userId: validatedUserId,
+      delta: 1,
+      initialCredits: 1,
+      minCredits: 0,
+    });
+    const refundNote = refund.success ? '' : `；且回滚余额失败：${refund.message}`;
+    return { success: false, message: `预约失败: ${insertError.message}${refundNote}` };
   }
 
   return { success: true, message: '预约成功', scheduledTime: scheduledIso };

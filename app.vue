@@ -24,5 +24,11 @@ window.global = window;
   </VApp>
 </template>
 
-<style scoped>
+<style>
+.btn-click-locked {
+  opacity: 0.45 !important;
+  filter: grayscale(0.9);
+  pointer-events: none !important;
+  transition: opacity 0.08s linear;
+}
 </style>

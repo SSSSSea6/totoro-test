@@ -1,12 +1,13 @@
 import { getSupabaseAdminClient, isSupabaseConfigured } from '../../utils/supabaseAdminClient';
+import {
+  authenticateCreditUser,
+  claimRedeemCodeAndAddCredits,
+  ensureCreditsRow,
+  getOrInitCredits,
+  normalizeText,
+} from '../../utils/creditSecurity';
 
 const INITIAL_BONUS = 1;
-
-const normalizeCount = (raw: unknown) => {
-  const num = Number(raw);
-  if (!Number.isFinite(num)) return 1;
-  return Math.max(1, Math.floor(num));
-};
 
 export default defineEventHandler(async (event) => {
   if (!isSupabaseConfigured()) {
@@ -14,214 +15,72 @@ export default defineEventHandler(async (event) => {
   }
 
   const body = await readBody(event);
-  const { action, userId, code } = body || {};
-  const count = normalizeCount((body || {}).count);
-
-  if (!userId) {
-    return { success: false, message: '缺少 userId' };
+  const action = normalizeText(body?.action).toLowerCase();
+  const auth = await authenticateCreditUser(body?.userId, body?.token);
+  if (!auth.success) {
+    return { success: false, message: auth.message };
   }
 
+  const userId = auth.userId;
   const supabase = getSupabaseAdminClient();
 
-  const ensureInitialRows = async () => {
-    const now = new Date().toISOString();
-    const { data: backInserted, error: backErr } = await supabase
-      .from('backfill_run_credits')
-      .upsert({
-        user_id: userId,
-        credits: INITIAL_BONUS,
-        updated_at: now,
-      })
-      .select('credits')
-      .single();
-
-    const { error: sunErr } = await supabase.from('sunrun_credits').upsert({
-      user_id: userId,
-      credits: INITIAL_BONUS,
-      updated_at: now,
+  const ensureSunrunExists = async () =>
+    ensureCreditsRow({
+      supabase,
+      table: 'sunrun_credits',
+      userId,
+      initialCredits: INITIAL_BONUS,
     });
-
-    return { error: backErr || sunErr, credits: backInserted?.credits ?? INITIAL_BONUS };
-  };
-
-  const ensureSunrunExists = async () => {
-    const { data, error } = await supabase
-      .from('sunrun_credits')
-      .select('credits')
-      .eq('user_id', userId)
-      .single();
-
-    if (error && error.code !== 'PGRST116') {
-      return { success: false, message: error.message };
-    }
-
-    if (error?.code === 'PGRST116' || !data) {
-      const { error: upsertError } = await supabase
-        .from('sunrun_credits')
-        .upsert({
-          user_id: userId,
-          credits: INITIAL_BONUS,
-          updated_at: new Date().toISOString(),
-        })
-        .single();
-
-      if (upsertError) {
-        return { success: false, message: upsertError.message };
-      }
-    }
-
-    return { success: true };
-  };
 
   if (action === 'get') {
-    const { data, error } = await supabase
-      .from('backfill_run_credits')
-      .select('credits')
-      .eq('user_id', userId)
-      .single();
-
-    if (error && error.code !== 'PGRST116') {
-      return { success: false, message: error.message };
-    }
-
-    if (error?.code === 'PGRST116' || !data) {
-      const { data: inserted, error: upsertError } = await supabase
-        .from('backfill_run_credits')
-        .upsert({
-          user_id: userId,
-          credits: INITIAL_BONUS,
-          updated_at: new Date().toISOString(),
-        })
-        .select('credits')
-        .single();
-
-      if (upsertError) {
-        return { success: false, message: upsertError.message };
-      }
-
-      await ensureSunrunExists();
-      return { success: true, credits: inserted?.credits ?? INITIAL_BONUS };
-    }
-
-    await ensureSunrunExists();
-    return { success: true, credits: data?.credits ?? 0 };
-  }
-
-  if (action === 'consume') {
-    let { data, error } = await supabase
-      .from('backfill_run_credits')
-      .select('credits')
-      .eq('user_id', userId)
-      .single();
-
-    if (error && error.code !== 'PGRST116') {
-      return { success: false, message: error.message };
-    }
-
-    if (error?.code === 'PGRST116' || !data) {
-      const init = await ensureInitialRows();
-      if (init.error) {
-        return { success: false, message: init.error.message };
-      }
-      data = { credits: init.credits };
-    }
-
-    const currentCredits = Number(data?.credits ?? 0);
-    if (currentCredits < count) {
-      return {
-        success: false,
-        message: `补跑次数不足（需 ${count}，剩余 ${currentCredits}）`,
-        credits: currentCredits,
-      };
-    }
-
-    const nextCredits = currentCredits - count;
-    const { error: updateError } = await supabase
-      .from('backfill_run_credits')
-      .update({ credits: nextCredits, updated_at: new Date().toISOString() })
-      .eq('user_id', userId);
-
-    if (updateError) {
-      return { success: false, message: updateError.message };
-    }
-
-    return { success: true, credits: nextCredits, count };
-  }
-
-  if (action === 'refund') {
-    const { data, error } = await supabase
-      .from('backfill_run_credits')
-      .select('credits')
-      .eq('user_id', userId)
-      .single();
-
-    if (error && error.code !== 'PGRST116') {
-      return { success: false, message: error.message };
-    }
-
-    const currentCredits = Number(data?.credits ?? 0);
-    const nextCredits = currentCredits + count;
-    const { error: upsertError } = await supabase.from('backfill_run_credits').upsert({
-      user_id: userId,
-      credits: nextCredits,
-      updated_at: new Date().toISOString(),
+    const backfill = await getOrInitCredits({
+      supabase,
+      table: 'backfill_run_credits',
+      userId,
+      initialCredits: INITIAL_BONUS,
     });
-
-    if (upsertError) {
-      return { success: false, message: upsertError.message };
+    if (!backfill.success) {
+      return { success: false, message: backfill.message };
     }
 
-    return { success: true, credits: nextCredits, count };
+    const sunrun = await ensureSunrunExists();
+    if (!sunrun.success) {
+      return { success: false, message: sunrun.message };
+    }
+
+    return { success: true, credits: backfill.credits };
   }
 
   if (action === 'redeem') {
-    if (!code) {
-      return { success: false, message: '缺少兑换码' };
+    const res = await claimRedeemCodeAndAddCredits({
+      supabase,
+      codeTable: 'backfill_redeem_codes',
+      creditsTable: 'backfill_run_credits',
+      userId,
+      code: normalizeText(body?.code),
+      initialCredits: INITIAL_BONUS,
+    });
+    if (!res.success) {
+      return { success: false, message: res.message };
     }
 
-    const { data: codeData, error: codeError } = await supabase
-      .from('backfill_redeem_codes')
-      .select('code, amount, is_used, used_by, used_at')
-      .eq('code', code)
-      .eq('is_used', false)
-      .single();
-
-    if (codeError || !codeData) {
-      return { success: false, message: '兑换码无效或已使用' };
+    const sunrun = await ensureSunrunExists();
+    if (!sunrun.success) {
+      return { success: false, message: sunrun.message };
     }
 
-    const { error: markError } = await supabase
-      .from('backfill_redeem_codes')
-      .update({ is_used: true, used_by: userId, used_at: new Date().toISOString() })
-      .eq('code', code);
+    return {
+      success: true,
+      message: `成功兑换 ${res.amount} 次`,
+      credits: res.credits,
+    };
+  }
 
-    if (markError) {
-      return { success: false, message: '兑换失败，请重试' };
-    }
-
-    const { data: userData, error: userError } = await supabase
-      .from('backfill_run_credits')
-      .select('credits')
-      .eq('user_id', userId)
-      .single();
-
-    if (userError && userError.code !== 'PGRST116') {
-      return { success: false, message: userError.message };
-    }
-
-    const currentCredits = Number(userData?.credits ?? INITIAL_BONUS);
-    const newCredits = currentCredits + Number(codeData.amount ?? 1);
-
-    const { error: upsertError } = await supabase
-      .from('backfill_run_credits')
-      .upsert({ user_id: userId, credits: newCredits, updated_at: new Date().toISOString() });
-
-    if (upsertError) {
-      return { success: false, message: '兑换失败，请稍后重试' };
-    }
-
-    await ensureSunrunExists();
-    return { success: true, message: `成功兑换 ${codeData.amount ?? 1} 次`, credits: newCredits };
+  if (action === 'consume' || action === 'refund') {
+    return {
+      success: false,
+      message: '该接口已下线旧版扣减/返还动作，请刷新页面后重试',
+    };
   }
 
   return { success: false, message: '未知操作' };
