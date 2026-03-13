@@ -5,6 +5,7 @@ import {
   isDateOnly,
   normalizeText,
 } from '../utils/creditSecurity';
+import { fetchSunRunHistory } from '../utils/sunrunHistory';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -26,6 +27,29 @@ const getShanghaiDateStr = () => {
   const m = String(shanghaiNow.getMonth() + 1).padStart(2, '0');
   const d = String(shanghaiNow.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+};
+
+const toShanghaiDateStr = (input: string | null | undefined) => {
+  if (!input) return '';
+  const date = new Date(input);
+  if (Number.isNaN(date.getTime())) return '';
+  const offsetMs = (8 * 60 + date.getTimezoneOffset()) * 60 * 1000;
+  const shanghaiDate = new Date(date.getTime() + offsetMs);
+  const y = shanghaiDate.getFullYear();
+  const m = String(shanghaiDate.getMonth() + 1).padStart(2, '0');
+  const d = String(shanghaiDate.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
+const resolveTaskTargetDate = (task: { user_data?: Record<string, any> | null; created_at?: string | null }) => {
+  const userData = task.user_data || {};
+  const targetDate = normalizeText(userData.targetDate);
+  if (isDateOnly(targetDate)) return targetDate;
+
+  const customDate = normalizeText(userData.customDate);
+  if (isDateOnly(customDate)) return customDate;
+
+  return toShanghaiDateStr(task.created_at ?? null);
 };
 
 export default defineEventHandler(async (event) => {
@@ -62,10 +86,12 @@ export default defineEventHandler(async (event) => {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
     const customDate = normalizeText((userData as any).customDate);
     const isBackfill = isDateOnly(customDate);
+    const targetDate = isBackfill ? customDate : getShanghaiDateStr();
     const creditTable = isBackfill ? 'backfill_run_credits' : 'sunrun_credits';
     const taskUserData = {
       ...userData,
       runMode: isBackfill ? 'backfill' : 'normal',
+      targetDate,
       creditTable,
       reservedCredit: true,
       reservedCreditCount: 1,
@@ -74,50 +100,53 @@ export default defineEventHandler(async (event) => {
       creditRefundError: null,
     };
 
+    const history = await fetchSunRunHistory({
+      session: {
+        stuNumber,
+        token,
+        schoolId: normalizeText(session.schoolId),
+        campusId: normalizeText(session.campusId),
+      },
+      startDate: targetDate,
+      endDate: targetDate,
+    });
+
+    if (!history.success) {
+      return buildJsonResponse(500, {
+        success: false,
+        error: `运动记录检查失败: ${history.message}`,
+      });
+    }
+
+    if (Array.isArray(history.dates) && history.dates.includes(targetDate)) {
+      return buildJsonResponse(409, {
+        success: false,
+        error: isBackfill ? `日期 ${targetDate} 已有运动记录` : '今天已有运动记录',
+      });
+    }
+
     // 服务端再做一次幂等检查，避免直接刷接口重复入队
-    if (isBackfill) {
-      const { data: duplicate, error: duplicateError } = await supabase
-        .from('Tasks')
-        .select('id')
-        .in('status', ['PENDING', 'PROCESSING', 'SUCCESS'])
-        .contains('user_data', { session: { stuNumber } })
-        .eq('user_data->>customDate', customDate)
-        .limit(1);
+    const { data: duplicateTasks, error: duplicateError } = await supabase
+      .from('Tasks')
+      .select('id, user_data, created_at')
+      .in('status', ['PENDING', 'PROCESSING', 'SUCCESS'])
+      .contains('user_data', { session: { stuNumber } });
 
-      if (duplicateError) {
-        return buildJsonResponse(500, {
-          success: false,
-          error: `重复任务检查失败: ${duplicateError.message}`,
-        });
-      }
+    if (duplicateError) {
+      return buildJsonResponse(500, {
+        success: false,
+        error: `重复任务检查失败: ${duplicateError.message}`,
+      });
+    }
 
-      if (Array.isArray(duplicate) && duplicate.length > 0) {
-        return buildJsonResponse(409, { success: false, error: `日期 ${customDate} 已存在任务` });
-      }
-    } else {
-      const today = getShanghaiDateStr();
-      const dayStart = new Date(`${today}T00:00:00+08:00`).toISOString();
-      const dayEnd = new Date(`${today}T23:59:59.999+08:00`).toISOString();
+    const duplicated = Array.isArray(duplicateTasks)
+      && duplicateTasks.some((task) => resolveTaskTargetDate(task as any) === targetDate);
 
-      const { data: duplicate, error: duplicateError } = await supabase
-        .from('Tasks')
-        .select('id')
-        .in('status', ['PENDING', 'PROCESSING', 'SUCCESS'])
-        .contains('user_data', { session: { stuNumber } })
-        .gte('created_at', dayStart)
-        .lte('created_at', dayEnd)
-        .limit(1);
-
-      if (duplicateError) {
-        return buildJsonResponse(500, {
-          success: false,
-          error: `重复任务检查失败: ${duplicateError.message}`,
-        });
-      }
-
-      if (Array.isArray(duplicate) && duplicate.length > 0) {
-        return buildJsonResponse(409, { success: false, error: '今天已存在任务' });
-      }
+    if (duplicated) {
+      return buildJsonResponse(409, {
+        success: false,
+        error: isBackfill ? `日期 ${targetDate} 已存在任务` : '今天已存在任务',
+      });
     }
 
     const consume = await adjustCreditsWithRetry({

@@ -22,6 +22,12 @@ interface QueueSubmitResult {
   error?: string;
 }
 
+interface TaskDateRow {
+  id: number;
+  created_at?: string | null;
+  user_data?: Record<string, any> | null;
+}
+
 const sunrunPaper = useSunRunPaper();
 const session = useSession();
 const route = useRoute();
@@ -250,45 +256,55 @@ const toggleDate = (iso: string, disabled: boolean) => {
 
 const randomPeriod = (): 'AM' | 'PM' => (Math.random() < 0.5 ? 'AM' : 'PM');
 
-const hasTaskOnDate = async (date: string) => {
+const toShanghaiDateStr = (input: string | null | undefined) => {
+  if (!input) return '';
+  const date = new Date(input);
+  if (Number.isNaN(date.getTime())) return '';
+  const offsetMs = (8 * 60 + date.getTimezoneOffset()) * 60 * 1000;
+  const shanghaiDate = new Date(date.getTime() + offsetMs);
+  return formatDateOnly(shanghaiDate);
+};
+
+const resolveTaskTargetDate = (task: TaskDateRow) => {
+  const userData = task.user_data || {};
+  const targetDate =
+    typeof userData.targetDate === 'string' ? userData.targetDate.trim() : '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) return targetDate;
+
+  const customDate =
+    typeof userData.customDate === 'string' ? userData.customDate.trim() : '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(customDate)) return customDate;
+
+  return toShanghaiDateStr(task.created_at);
+};
+
+const hasOfficialRecordOnDate = (date: string) => completedDateSet.value.has(date);
+
+const hasQueuedTaskOnDate = async (date: string) => {
   if (!supabaseEnabled.value || !supabase || !session.value?.stuNumber) return false;
   const { data, error } = await supabase
     .from('Tasks')
-    .select('id')
+    .select('id, user_data, created_at')
     .in('status', ['PENDING', 'PROCESSING', 'SUCCESS'])
-    .contains('user_data', { session: { stuNumber: session.value.stuNumber } })
-    .eq('user_data->>customDate', date)
-    .limit(1);
+    .contains('user_data', { session: { stuNumber: session.value.stuNumber } });
 
   if (error) {
     console.warn('[queue] duplicate-check failed', error);
     return false;
   }
 
-  return Array.isArray(data) && data.length > 0;
+  return Array.isArray(data) && data.some((task) => resolveTaskTargetDate(task as TaskDateRow) === date);
+};
+
+const hasTaskOnDate = async (date: string) => {
+  if (hasOfficialRecordOnDate(date)) return true;
+  return hasQueuedTaskOnDate(date);
 };
 
 const hasTaskToday = async () => {
-  if (!supabaseEnabled.value || !supabase || !session.value?.stuNumber) return false;
   const today = getShanghaiDateStr();
-  const dayStart = new Date(`${today}T00:00:00+08:00`).toISOString();
-  const dayEnd = new Date(`${today}T23:59:59.999+08:00`).toISOString();
-
-  const { data, error } = await supabase
-    .from('Tasks')
-    .select('id')
-    .in('status', ['PENDING', 'PROCESSING', 'SUCCESS'])
-    .contains('user_data', { session: { stuNumber: session.value.stuNumber } })
-    .gte('created_at', dayStart)
-    .lte('created_at', dayEnd)
-    .limit(1);
-
-  if (error) {
-    console.warn('[queue] today duplicate-check failed', error);
-    return false;
-  }
-
-  return Array.isArray(data) && data.length > 0;
+  if (hasOfficialRecordOnDate(today)) return true;
+  return hasQueuedTaskOnDate(today);
 };
 
 const fetchSunCredits = async () => {
@@ -513,6 +529,15 @@ const submitBackfillJobs = async () => {
     return;
   }
 
+  const recordedDates = dates.filter((date) => hasOfficialRecordOnDate(date));
+  if (recordedDates.length) {
+    statusMessage.value = '以下日期已有龙猫运动记录，请取消后重试';
+    resultLog.value = recordedDates.join('、');
+    submitted.value = false;
+    taskIds.value = [];
+    return;
+  }
+
   statusMessage.value = '正在校验重复任务...';
   resultLog.value = '';
   submitted.value = false;
@@ -584,6 +609,11 @@ const submitSunRunJob = async () => {
   resultLog.value = '';
   submitted.value = false;
   taskIds.value = [];
+
+  if (hasOfficialRecordOnDate(todayStr.value)) {
+    statusMessage.value = '今天已有龙猫运动记录，请勿重复提交';
+    return;
+  }
 
   const duplicated = await hasTaskToday();
   if (duplicated) {
