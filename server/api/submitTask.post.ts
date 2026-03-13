@@ -63,6 +63,16 @@ export default defineEventHandler(async (event) => {
     const customDate = normalizeText((userData as any).customDate);
     const isBackfill = isDateOnly(customDate);
     const creditTable = isBackfill ? 'backfill_run_credits' : 'sunrun_credits';
+    const taskUserData = {
+      ...userData,
+      runMode: isBackfill ? 'backfill' : 'normal',
+      creditTable,
+      reservedCredit: true,
+      reservedCreditCount: 1,
+      creditRefunded: false,
+      creditRefundPending: false,
+      creditRefundError: null,
+    };
 
     // 服务端再做一次幂等检查，避免直接刷接口重复入队
     if (isBackfill) {
@@ -135,7 +145,7 @@ export default defineEventHandler(async (event) => {
 
     const { data, error } = await supabase
       .from('Tasks')
-      .insert([{ user_data: userData, status: 'PENDING' }])
+      .insert([{ user_data: taskUserData, status: 'PENDING' }])
       .select()
       .single();
 
