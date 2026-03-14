@@ -41,9 +41,9 @@ const prefixUrl = isServer ? 'https://app.xtotoro.com/app' : '/api/totoro';
 const TotoroApiWrapper = {
   client: ky.create({
     prefixUrl,
-    timeout: 12000,
+    timeout: 8000,
     retry: {
-      limit: 2,
+      limit: 1,
       methods: ['post'],
     },
     headers: {

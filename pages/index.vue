@@ -120,7 +120,7 @@ const handleScanned = async () => {
       code: scanRes.code,
     });
     session.value = normalized as any;
-    await syncPendingMorningTasks(personalInfo.stuNumber, lesseeServer.token);
+    void syncPendingMorningTasks(personalInfo.stuNumber, lesseeServer.token);
 
     const breq: BasicRequest = {
       token: lesseeServer.token,
@@ -129,7 +129,7 @@ const handleScanned = async () => {
       stuNumber: personalInfo.stuNumber,
     };
     runPostLoginPrefetch(breq);
-    await bootstrapCredits(personalInfo.stuNumber, lesseeServer.token);
+    void bootstrapCredits(personalInfo.stuNumber, lesseeServer.token);
 
     message.value = '登录成功，可选择入口';
     snackbar.value = true;

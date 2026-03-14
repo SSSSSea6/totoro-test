@@ -92,7 +92,7 @@ const handleScanned = async () => {
     const personalInfo = await TotoroApiWrapper.login({ token: lesseeServer.token });
     const normalized = normalizeSession({ ...personalInfo, token: lesseeServer.token, code: scanRes.code });
     session.value = normalized as any;
-    await syncPendingMorningTasks(personalInfo.stuNumber, lesseeServer.token);
+    void syncPendingMorningTasks(personalInfo.stuNumber, lesseeServer.token);
 
     const breq: BasicRequest = {
       token: lesseeServer.token,
@@ -102,7 +102,7 @@ const handleScanned = async () => {
     };
 
     runPostLoginPrefetch(breq);
-    await router.push(redirect.value);
+    await router.replace(redirect.value);
   } catch (error) {
     console.error('[totoro-login] handleScanned failed', error);
     if (isKyHttpError(error)) {
