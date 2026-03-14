@@ -3,9 +3,9 @@ import { createError, getRequestHeader, readRawBody } from 'h3';
 
 const RATE_LIMIT_MAX_REQUESTS = 8;
 const RATE_LIMIT_WINDOW_MS = 1_000;
-const REQUEST_TIMEOUT_MS = 8_000;
-const MAX_RETRIES = 1;
-const RETRY_DELAY_MS = 250;
+const REQUEST_TIMEOUT_MS = 12_000;
+const MAX_RETRIES = 2;
+const RETRY_DELAY_MS = 400;
 const CACHE_TTL_MS = 30_000;
 const CACHEABLE_PATHS = new Set([
   '/app/platform/login/getAppFrontPage',

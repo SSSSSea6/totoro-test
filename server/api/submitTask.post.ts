@@ -41,7 +41,7 @@ const toShanghaiDateStr = (input: string | null | undefined) => {
   return `${y}-${m}-${d}`;
 };
 
-const resolveTaskTargetDate = (task: { user_data?: Record<string, any> | null }) => {
+const resolveTaskTargetDate = (task: { user_data?: Record<string, any> | null; created_at?: string | null }) => {
   const userData = task.user_data || {};
   const targetDate = normalizeText(userData.targetDate);
   if (isDateOnly(targetDate)) return targetDate;
@@ -49,7 +49,7 @@ const resolveTaskTargetDate = (task: { user_data?: Record<string, any> | null })
   const customDate = normalizeText(userData.customDate);
   if (isDateOnly(customDate)) return customDate;
 
-  return toShanghaiDateStr(normalizeText(userData.queuedAt || userData.queueAt || userData.submittedAt));
+  return toShanghaiDateStr(task.created_at ?? null);
 };
 
 export default defineEventHandler(async (event) => {
@@ -128,7 +128,7 @@ export default defineEventHandler(async (event) => {
     // 服务端再做一次幂等检查，避免直接刷接口重复入队
     const { data: duplicateTasks, error: duplicateError } = await supabase
       .from('Tasks')
-      .select('id, user_data')
+      .select('id, user_data, created_at')
       .in('status', ['PENDING', 'PROCESSING', 'SUCCESS'])
       .contains('user_data', { session: { stuNumber } });
 

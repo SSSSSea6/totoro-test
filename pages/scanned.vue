@@ -24,11 +24,9 @@ interface QueueSubmitResult {
 
 interface TaskDateRow {
   id: number;
+  created_at?: string | null;
   user_data?: Record<string, any> | null;
 }
-
-const QUEUED_DATE_CACHE_TTL_MS = 15_000;
-const MAP_LAZY_LOAD_DELAY_MS = 800;
 
 const sunrunPaper = useSunRunPaper();
 const session = useSession();
@@ -45,12 +43,6 @@ const completedDates = ref<string[]>([]);
 const runHistoryRecords = ref<HistoryRecord[]>([]);
 const historyDialog = ref(false);
 const loadingHistory = ref(false);
-const historyLoadedOnce = ref(false);
-const loadingInitial = ref(false);
-const mapVisible = ref(false);
-const queuedTaskDateCache = shallowRef<Set<string>>(new Set());
-const queuedTaskDateCacheAt = ref(0);
-let mapLoadTimer: ReturnType<typeof setTimeout> | null = null;
 
 const credits = ref(0);
 const loadingCredits = ref(false);
@@ -264,14 +256,6 @@ const toggleDate = (iso: string, disabled: boolean) => {
 
 const randomPeriod = (): 'AM' | 'PM' => (Math.random() < 0.5 ? 'AM' : 'PM');
 
-const scheduleMapLoad = () => {
-  if (mapVisible.value || mapLoadTimer) return;
-  mapLoadTimer = window.setTimeout(() => {
-    mapVisible.value = true;
-    mapLoadTimer = null;
-  }, MAP_LAZY_LOAD_DELAY_MS);
-};
-
 const toShanghaiDateStr = (input: string | null | undefined) => {
   if (!input) return '';
   const date = new Date(input);
@@ -291,67 +275,36 @@ const resolveTaskTargetDate = (task: TaskDateRow) => {
     typeof userData.customDate === 'string' ? userData.customDate.trim() : '';
   if (/^\d{4}-\d{2}-\d{2}$/.test(customDate)) return customDate;
 
-  const queuedAt =
-    typeof userData.queuedAt === 'string'
-      ? userData.queuedAt.trim()
-      : typeof userData.queueAt === 'string'
-        ? userData.queueAt.trim()
-        : typeof userData.submittedAt === 'string'
-          ? userData.submittedAt.trim()
-          : '';
-
-  return toShanghaiDateStr(queuedAt);
+  return toShanghaiDateStr(task.created_at);
 };
 
 const hasOfficialRecordOnDate = (date: string) => completedDateSet.value.has(date);
 
-const fetchQueuedTaskDateSet = async (force = false) => {
-  if (!supabaseEnabled.value || !supabase || !session.value?.stuNumber) return new Set<string>();
-  if (
-    !force &&
-    queuedTaskDateCacheAt.value > 0 &&
-    Date.now() - queuedTaskDateCacheAt.value < QUEUED_DATE_CACHE_TTL_MS
-  ) {
-    return queuedTaskDateCache.value;
-  }
-
+const hasQueuedTaskOnDate = async (date: string) => {
+  if (!supabaseEnabled.value || !supabase || !session.value?.stuNumber) return false;
   const { data, error } = await supabase
     .from('Tasks')
-    .select('id, user_data')
+    .select('id, user_data, created_at')
     .in('status', ['PENDING', 'PROCESSING', 'SUCCESS'])
     .contains('user_data', { session: { stuNumber: session.value.stuNumber } });
 
   if (error) {
     console.warn('[queue] duplicate-check failed', error);
-    return queuedTaskDateCache.value;
+    return false;
   }
 
-  const nextDates = new Set<string>();
-  if (Array.isArray(data)) {
-    data.forEach((task) => {
-      const taskDate = resolveTaskTargetDate(task as TaskDateRow);
-      if (taskDate) nextDates.add(taskDate);
-    });
-  }
-
-  queuedTaskDateCache.value = nextDates;
-  queuedTaskDateCacheAt.value = Date.now();
-  return nextDates;
+  return Array.isArray(data) && data.some((task) => resolveTaskTargetDate(task as TaskDateRow) === date);
 };
 
-const mergeQueuedTaskDates = (dates: string[]) => {
-  if (!dates.length) return;
-  const nextDates = new Set(queuedTaskDateCache.value);
-  dates.forEach((date) => {
-    if (/^\d{4}-\d{2}-\d{2}$/.test(date)) nextDates.add(date);
-  });
-  queuedTaskDateCache.value = nextDates;
-  queuedTaskDateCacheAt.value = Date.now();
+const hasTaskOnDate = async (date: string) => {
+  if (hasOfficialRecordOnDate(date)) return true;
+  return hasQueuedTaskOnDate(date);
 };
 
-const hasQueuedTaskOnDate = async (date: string) => {
-  const queuedDates = await fetchQueuedTaskDateSet();
-  return queuedDates.has(date);
+const hasTaskToday = async () => {
+  const today = getShanghaiDateStr();
+  if (hasOfficialRecordOnDate(today)) return true;
+  return hasQueuedTaskOnDate(today);
 };
 
 const fetchSunCredits = async () => {
@@ -458,7 +411,6 @@ const handleSunRedeem = async () => {
 };
 
 const loadCompletedDates = async () => {
-  if (loadingHistory.value) return;
   if (
     !session.value?.stuNumber ||
     !session.value?.token ||
@@ -468,12 +420,10 @@ const loadCompletedDates = async () => {
   ) {
     completedDates.value = [];
     runHistoryRecords.value = [];
-    historyLoadedOnce.value = false;
     return;
   }
 
   loadingHistory.value = true;
-  let loaded = false;
   try {
     const data = await $fetch<{
       success?: boolean;
@@ -498,12 +448,10 @@ const loadCompletedDates = async () => {
       ? Array.from(new Set(data.dates.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))))
       : [];
     completedDates.value = normalizedDates;
-    selectedDates.value = selectedDates.value.filter((date) => !normalizedDates.includes(date));
 
     runHistoryRecords.value = Array.isArray(data?.records)
       ? [...data.records].sort((a, b) => b.runTime.localeCompare(a.runTime))
       : [];
-    loaded = true;
 
     if (data?.message) {
       statusMessage.value = data.message;
@@ -514,13 +462,7 @@ const loadCompletedDates = async () => {
     runHistoryRecords.value = [];
   } finally {
     loadingHistory.value = false;
-    if (loaded) historyLoadedOnce.value = true;
   }
-};
-
-const ensureRunHistoryLoaded = async (force = false) => {
-  if (!force && historyLoadedOnce.value) return;
-  await loadCompletedDates();
 };
 
 const buildJobPayload = (params: {
@@ -601,10 +543,10 @@ const submitBackfillJobs = async () => {
   submitted.value = false;
   taskIds.value = [];
 
-  const queuedTaskDates = await fetchQueuedTaskDateSet(true);
-  const duplicatedDates = dates.filter(
-    (date) => hasOfficialRecordOnDate(date) || (queuedTaskDates instanceof Set && queuedTaskDates.has(date)),
+  const duplicateChecks = await Promise.all(
+    dates.map(async (date) => ({ date, duplicated: await hasTaskOnDate(date) })),
   );
+  const duplicatedDates = duplicateChecks.filter((item) => item.duplicated).map((item) => item.date);
 
   if (duplicatedDates.length) {
     statusMessage.value = '以下日期已在队列或已完成，请取消后重试';
@@ -612,7 +554,6 @@ const submitBackfillJobs = async () => {
     return;
   }
   const createdTaskIds: number[] = [];
-  const createdTaskDates: string[] = [];
   const failedDetails: string[] = [];
 
   statusMessage.value = `正在提交 ${dates.length} 个任务到队列...`;
@@ -627,7 +568,6 @@ const submitBackfillJobs = async () => {
       const submitRes = await submitTaskToQueue(payload);
       if (submitRes.ok && typeof submitRes.taskId === 'number') {
         createdTaskIds.push(submitRes.taskId);
-        createdTaskDates.push(date);
       } else {
         failedDetails.push(`${date}: ${submitRes.error || '入队失败'}`);
       }
@@ -635,7 +575,6 @@ const submitBackfillJobs = async () => {
 
     taskIds.value = createdTaskIds;
     if (createdTaskIds.length > 0) {
-      mergeQueuedTaskDates(createdTaskDates);
       submitted.value = true;
       selectedDates.value = [];
       statusMessage.value = `已成功入队 ${createdTaskIds.length} 个任务`;
@@ -655,7 +594,8 @@ const submitBackfillJobs = async () => {
     statusMessage.value = '提交异常';
     resultLog.value = (error as Error).message;
   } finally {
-    void fetchCredits();
+    await fetchCredits();
+    await loadCompletedDates();
   }
 };
 
@@ -675,8 +615,8 @@ const submitSunRunJob = async () => {
     return;
   }
 
-  const queuedTaskDates = await fetchQueuedTaskDateSet(true);
-  if (queuedTaskDates instanceof Set && queuedTaskDates.has(todayStr.value)) {
+  const duplicated = await hasTaskToday();
+  if (duplicated) {
     statusMessage.value = '今天已有任务在队列或已完成，请勿重复提交';
     return;
   }
@@ -689,7 +629,6 @@ const submitSunRunJob = async () => {
     }
 
     taskIds.value = [submitRes.taskId];
-    mergeQueuedTaskDates([todayStr.value]);
     submitted.value = true;
     statusMessage.value = '任务已入队';
     resultLog.value = `任务ID：${submitRes.taskId}`;
@@ -697,7 +636,7 @@ const submitSunRunJob = async () => {
     statusMessage.value = '提交失败';
     resultLog.value = (error as Error).message;
   } finally {
-    void fetchSunCredits();
+    await fetchSunCredits();
   }
 };
 
@@ -727,7 +666,6 @@ const init = async () => {
     return;
   }
 
-  loadingInitial.value = true;
   try {
     const data = await TotoroApiWrapper.getSunRunPaper({
       token: session.value.token,
@@ -740,62 +678,20 @@ const init = async () => {
     selectValue.value = '';
     selectedDates.value = [];
     calendarMonthOffset.value = 0;
-    scheduleMapLoad();
-    void Promise.all([fetchSunCredits(), fetchCredits()]);
-    if (showBackfill.value) {
-      void ensureRunHistoryLoaded();
-    }
+
+    await Promise.all([fetchSunCredits(), fetchCredits()]);
+    await loadCompletedDates();
   } catch (error) {
     statusMessage.value = '获取路线失败';
     resultLog.value = (error as Error).message;
-  } finally {
-    loadingInitial.value = false;
   }
 };
 
-watch(
-  () => showBackfill.value,
-  (enabled) => {
-    if (enabled) void ensureRunHistoryLoaded();
-  },
-);
-
-watch(
-  () => session.value?.stuNumber,
-  () => {
-    queuedTaskDateCache.value = new Set();
-    queuedTaskDateCacheAt.value = 0;
-    historyLoadedOnce.value = false;
-    completedDates.value = [];
-    runHistoryRecords.value = [];
-  },
-);
-
-watch(
-  () => historyDialog.value,
-  (open) => {
-    if (open) void ensureRunHistoryLoaded();
-  },
-);
-
-onMounted(() => {
-  void init();
-});
-
-onUnmounted(() => {
-  if (mapLoadTimer) {
-    clearTimeout(mapLoadTimer);
-    mapLoadTimer = null;
-  }
-});
+await init();
 </script>
 
 <template>
   <div class="p-4 space-y-4">
-    <VAlert v-if="loadingInitial" type="info" variant="tonal">
-      正在加载路线与账户信息，页面其余部分会优先显示。
-    </VAlert>
-
     <div>
       <p>请核对个人信息</p>
       <VTable density="compact" class="mb-6 mt-4">
@@ -908,9 +804,6 @@ onUnmounted(() => {
       </div>
 
       <div class="text-sm text-gray-600">当前月份：{{ monthLabel }}</div>
-      <div v-if="loadingHistory" class="text-sm text-gray-500">
-        正在同步龙猫运动记录，已跑日期会稍后自动高亮。
-      </div>
 
       <div class="max-w-2xl border rounded-md p-3">
         <div class="grid grid-cols-7 text-center text-caption text-gray-500 mb-2">
@@ -1053,15 +946,9 @@ onUnmounted(() => {
     </VAlert>
 
     <div v-if="sunrunPaper?.runPointList?.length" class="h-50vh w-full md:w-50vw">
-      <ClientOnly v-if="mapVisible">
+      <ClientOnly>
         <AMap :target="selectValue" @update:target="selectValue = $event" />
       </ClientOnly>
-      <div
-        v-else
-        class="flex h-full w-full items-center justify-center rounded-md border border-gray-200 bg-gray-50 text-sm text-gray-500"
-      >
-        地图按需延后加载中，不影响选路线和提交。
-      </div>
     </div>
   </div>
 </template>
