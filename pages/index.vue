@@ -4,9 +4,14 @@ import type BasicRequest from '~/src/types/requestTypes/BasicRequest';
 import TotoroApiWrapper from '~/src/wrappers/TotoroApiWrapper';
 import normalizeSession from '~/src/utils/normalizeSession';
 
-const { data, refresh, pending } = await useFetch<{ uuid: string; imgUrl: string }>(
-  '/api/scanQr',
-);
+const {
+  data,
+  refresh: refreshQrPayload,
+  pending,
+} = useFetch<{ uuid: string; imgUrl: string }>('/api/scanQr', {
+  server: false,
+  immediate: false,
+});
 const message = ref('');
 const snackbar = ref(false);
 const isLoading = ref(false);
@@ -32,6 +37,26 @@ const isKyHttpError = (error: unknown): error is HTTPError =>
   typeof error === 'object' &&
   'response' in error &&
   typeof (error as Record<string, any>).response?.status === 'number';
+
+const loadQrCode = async (notifyOnFailure = false) => {
+  try {
+    await refreshQrPayload();
+    if (!data.value?.uuid && notifyOnFailure) {
+      message.value = '二维码加载失败，请稍后重试';
+      snackbar.value = true;
+    }
+  } catch (error) {
+    console.error('[scan-qr] load failed', error);
+    if (notifyOnFailure) {
+      message.value = '二维码加载失败，请稍后重试';
+      snackbar.value = true;
+    }
+  }
+};
+
+const refreshQrCode = async () => {
+  await loadQrCode(true);
+};
 
 const runPostLoginPrefetch = (req: BasicRequest) => {
   const optionalCalls: Array<{ label: string; run: () => Promise<unknown> }> = [
@@ -80,6 +105,27 @@ const syncPendingMorningTasks = async (userId: string, token: string) => {
   }
 };
 
+const runDeferredTask = (task: () => Promise<unknown>, delayMs = 900) => {
+  if (!process.client || typeof window === 'undefined') {
+    void task().catch((error) => console.error('[totoro-login] deferred task failed', error));
+    return;
+  }
+
+  window.setTimeout(() => {
+    void task().catch((error) => console.error('[totoro-login] deferred task failed', error));
+  }, delayMs);
+};
+
+const schedulePostLoginWarmup = (
+  req: BasicRequest,
+  params: { userId: string; token: string },
+) => {
+  runDeferredTask(async () => {
+    runPostLoginPrefetch(req);
+    await bootstrapCredits(params.userId, params.token);
+  });
+};
+
 const handleScanned = async () => {
   if (isLoading.value || isLoggedIn.value) return;
   message.value = '';
@@ -87,9 +133,9 @@ const handleScanned = async () => {
 
   const uuid = data.value?.uuid;
   if (!uuid) {
-    message.value = '二维码无效，请刷新后重试';
-    snackbar.value = true;
-    await refresh();
+    if (!pending.value) {
+      await loadQrCode();
+    }
     return;
   }
 
@@ -119,17 +165,18 @@ const handleScanned = async () => {
       token: lesseeServer.token,
       code: scanRes.code,
     });
-    session.value = normalized as any;
-    await syncPendingMorningTasks(personalInfo.stuNumber, lesseeServer.token);
-
     const breq: BasicRequest = {
       token: lesseeServer.token,
       campusId: personalInfo.campusId,
       schoolId: personalInfo.schoolId,
       stuNumber: personalInfo.stuNumber,
     };
-    runPostLoginPrefetch(breq);
-    await bootstrapCredits(personalInfo.stuNumber, lesseeServer.token);
+    session.value = normalized as any;
+    await syncPendingMorningTasks(personalInfo.stuNumber, lesseeServer.token);
+    schedulePostLoginWarmup(breq, {
+      userId: personalInfo.stuNumber,
+      token: lesseeServer.token,
+    });
 
     message.value = '登录成功，可选择入口';
     snackbar.value = true;
@@ -171,6 +218,7 @@ const stopPolling = () => {
 
 onMounted(() => {
   session.value = {};
+  void loadQrCode();
   startPolling();
 });
 
@@ -247,7 +295,7 @@ const goMornSign = () => {
       <div v-else class="text-center text-body-2 text-gray-500">正在加载二维码...</div>
     </VCard>
     <div class="flex items-center gap-3">
-      <VBtn variant="text" color="secondary" :loading="pending" @click="refresh">
+      <VBtn variant="text" color="secondary" :loading="pending" @click="refreshQrCode">
         刷新二维码
       </VBtn>
       <VChip v-if="polling" color="primary" variant="tonal" size="small">自动检测中</VChip>

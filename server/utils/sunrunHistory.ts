@@ -31,6 +31,12 @@ export interface SunRunHistoryRecord {
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const REQUEST_BATCH_SIZE = 4;
+
+interface HistoryMonthTask {
+  termId: string;
+  monthId: string;
+}
 
 const parseDate = (input: string, endOfDay = false) => {
   const suffix = endOfDay ? 'T23:59:59+08:00' : 'T00:00:00+08:00';
@@ -41,6 +47,18 @@ const isDateInRange = (datePart: string, start: Date, end: Date) => {
   if (!DATE_RE.test(datePart)) return false;
   const dateObj = parseDate(datePart);
   return !Number.isNaN(dateObj.getTime()) && dateObj >= start && dateObj <= end;
+};
+
+const mapInBatches = async <T, R>(items: T[], mapper: (item: T) => Promise<R>) => {
+  const results: R[] = [];
+
+  for (let index = 0; index < items.length; index += REQUEST_BATCH_SIZE) {
+    const batch = items.slice(index, index + REQUEST_BATCH_SIZE);
+    const batchResults = await Promise.all(batch.map(mapper));
+    results.push(...batchResults);
+  }
+
+  return results;
 };
 
 export const fetchSunRunHistory = async ({
@@ -76,49 +94,68 @@ export const fetchSunRunHistory = async ({
   const termResp = await TotoroApiWrapper.getSchoolTerm(basicReq);
   const terms = Array.isArray(termResp?.data) ? termResp.data : [];
 
-  const records: SunRunHistoryRecord[] = [];
+  const monthGroups = await mapInBatches(terms, async (term) => {
+    const termId = String((term as any)?.termId || (term as any)?.id || '').trim();
+    if (!termId) return [] as HistoryMonthTask[];
 
-  for (const term of terms) {
-    const termId = (term as any)?.termId || (term as any)?.id;
-    if (!termId) continue;
-
-    const monthResp = await TotoroApiWrapper.getSchoolMonthByTerm(termId, basicReq);
-    const monthList = (monthResp as any)?.monthList || (monthResp as any)?.data || [];
-
-    for (const month of monthList) {
-      const monthId = (month as any)?.monthId || (month as any)?.id || (month as any)?.monthCode;
-      if (!monthId) continue;
-
-      try {
-        const archResp = await TotoroApiWrapper.getSunRunArch(monthId, termId, basicReq);
-        const scoreList = Array.isArray((archResp as any)?.data)
-          ? ((archResp as any).data as ScoreItem[])
+    try {
+      const monthResp = await TotoroApiWrapper.getSchoolMonthByTerm(termId, basicReq);
+      const monthList = Array.isArray((monthResp as any)?.monthList)
+        ? (monthResp as any).monthList
+        : Array.isArray((monthResp as any)?.data)
+          ? (monthResp as any).data
           : [];
 
-        for (const score of scoreList) {
-          const runTime = String(score.runTime || '').trim();
-          if (!runTime) continue;
-
-          const datePart = runTime.split(' ')[0] || '';
-          if (!isDateInRange(datePart, start, end)) continue;
-
-          records.push({
-            scoreId: String(score.scoreId || ''),
-            date: datePart,
-            runTime,
-            mileage: String(score.mileage || ''),
-            usedTime: String(score.usedTime || ''),
-            calorie: String(score.calorie || ''),
-            status: String(score.status || ''),
-            runType: String(score.runType || ''),
-            flag: String(score.flag || ''),
-          });
+      return monthList.reduce<HistoryMonthTask[]>((acc, month) => {
+        const monthId = String(
+          (month as any)?.monthId || (month as any)?.id || (month as any)?.monthCode || '',
+        ).trim();
+        if (monthId) {
+          acc.push({ termId, monthId });
         }
-      } catch (error) {
-        console.warn('[history] getSunRunArch failed', monthId, (error as Error).message);
-      }
+        return acc;
+      }, []);
+    } catch (error) {
+      console.warn('[history] getSchoolMonthByTerm failed', termId, (error as Error).message);
+      return [] as HistoryMonthTask[];
     }
-  }
+  });
+
+  const monthTasks = monthGroups.flat();
+  const recordGroups = await mapInBatches(monthTasks, async ({ monthId, termId }) => {
+    try {
+      const archResp = await TotoroApiWrapper.getSunRunArch(monthId, termId, basicReq);
+      const scoreList = Array.isArray((archResp as any)?.data)
+        ? ((archResp as any).data as ScoreItem[])
+        : [];
+
+      return scoreList.reduce<SunRunHistoryRecord[]>((acc, score) => {
+        const runTime = String(score.runTime || '').trim();
+        if (!runTime) return acc;
+
+        const datePart = runTime.split(' ')[0] || '';
+        if (!isDateInRange(datePart, start, end)) return acc;
+
+        acc.push({
+          scoreId: String(score.scoreId || ''),
+          date: datePart,
+          runTime,
+          mileage: String(score.mileage || ''),
+          usedTime: String(score.usedTime || ''),
+          calorie: String(score.calorie || ''),
+          status: String(score.status || ''),
+          runType: String(score.runType || ''),
+          flag: String(score.flag || ''),
+        });
+        return acc;
+      }, []);
+    } catch (error) {
+      console.warn('[history] getSunRunArch failed', monthId, (error as Error).message);
+      return [] as SunRunHistoryRecord[];
+    }
+  });
+
+  const records = recordGroups.flat();
 
   records.sort((a, b) => b.runTime.localeCompare(a.runTime));
 

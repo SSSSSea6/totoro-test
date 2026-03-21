@@ -5,6 +5,7 @@ const TOKEN_CACHE_TTL_MS = 10 * 60 * 1000;
 const CREDIT_UPDATE_MAX_RETRY = 6;
 
 const tokenOwnerCache = new Map<string, { userId: string; expiresAt: number }>();
+const tokenOwnerPending = new Map<string, Promise<string>>();
 
 const cleanupTokenCache = () => {
   const now = Date.now();
@@ -18,6 +19,43 @@ const cleanupTokenCache = () => {
 export const normalizeText = (raw: unknown) => (typeof raw === 'string' ? raw.trim() : '');
 
 export const isDateOnly = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
+
+const resolveTokenOwner = async (token: string) => {
+  const cached = tokenOwnerCache.get(token);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.userId;
+  }
+
+  const pending = tokenOwnerPending.get(token);
+  if (pending) {
+    return pending;
+  }
+
+  const request = (async () => {
+    const loginRes = (await TotoroApiWrapper.login({ token })) as any;
+    const tokenOwner = normalizeText(loginRes?.stuNumber);
+    if (!tokenOwner) {
+      throw new Error('TOKEN_OWNER_MISSING');
+    }
+
+    tokenOwnerCache.set(token, {
+      userId: tokenOwner,
+      expiresAt: Date.now() + TOKEN_CACHE_TTL_MS,
+    });
+
+    return tokenOwner;
+  })();
+
+  tokenOwnerPending.set(token, request);
+
+  try {
+    return await request;
+  } finally {
+    if (tokenOwnerPending.get(token) === request) {
+      tokenOwnerPending.delete(token);
+    }
+  }
+};
 
 export const authenticateCreditUser = async (rawUserId: unknown, rawToken: unknown) => {
   const userId = normalizeText(rawUserId);
@@ -40,20 +78,15 @@ export const authenticateCreditUser = async (rawUserId: unknown, rawToken: unkno
   }
 
   try {
-    const loginRes = (await TotoroApiWrapper.login({ token })) as any;
-    const tokenOwner = normalizeText(loginRes?.stuNumber);
-    if (!tokenOwner) {
-      return { success: false as const, message: 'token 校验失败，请重新扫码登录' };
-    }
+    const tokenOwner = await resolveTokenOwner(token);
     if (tokenOwner !== userId) {
       return { success: false as const, message: 'userId 与 token 不匹配' };
     }
-    tokenOwnerCache.set(token, {
-      userId: tokenOwner,
-      expiresAt: Date.now() + TOKEN_CACHE_TTL_MS,
-    });
     return { success: true as const, userId };
-  } catch {
+  } catch (error) {
+    if ((error as Error).message === 'TOKEN_OWNER_MISSING') {
+      return { success: false as const, message: 'token 校验失败，请重新扫码登录' };
+    }
     return { success: false as const, message: 'token 已失效，请重新扫码登录' };
   }
 };

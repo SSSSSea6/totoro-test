@@ -49,6 +49,9 @@ const completedDates = ref<string[]>([]);
 const runHistoryRecords = ref<HistoryRecord[]>([]);
 const historyDialog = ref(false);
 const loadingHistory = ref(false);
+const loadingPaper = ref(true);
+const historyLoaded = ref(false);
+const historyLoadFailed = ref(false);
 
 const credits = ref(0);
 const loadingCredits = ref(false);
@@ -65,6 +68,7 @@ const isSubmitting = ref(false);
 const statusMessage = ref('');
 const resultLog = ref('');
 const taskIds = ref<number[]>([]);
+let historyLoadPromise: Promise<void> | null = null;
 
 const supabaseEnabled = computed(() => supabaseReady && Boolean(supabase));
 const routeList = computed(() => sunrunPaper.value?.runPointList || []);
@@ -93,6 +97,19 @@ const target = computed<RunPoint | null>(
   () => routeList.value.find((item) => item.pointId === selectValue.value) || null,
 );
 const routeChosen = computed(() => Boolean(target.value));
+
+const resetScannedState = () => {
+  sunrunPaper.value = undefined as any;
+  selectValue.value = '';
+  selectedDates.value = [];
+  calendarMonthOffset.value = 0;
+  completedDates.value = [];
+  runHistoryRecords.value = [];
+  historyLoaded.value = false;
+  historyLoadFailed.value = false;
+};
+
+resetScannedState();
 
 const applySelectedRoute = (pointId: string) => {
   selectValue.value = pointId;
@@ -465,60 +482,102 @@ const handleSunRedeem = async () => {
   }
 };
 
-const loadCompletedDates = async () => {
-  if (
-    !session.value?.stuNumber ||
-    !session.value?.token ||
-    !session.value?.schoolId ||
-    !sunrunPaper.value?.startDate ||
-    !sunrunPaper.value?.endDate
-  ) {
-    completedDates.value = [];
-    runHistoryRecords.value = [];
+const loadCompletedDates = async ({ force = false }: { force?: boolean } = {}) => {
+  if (!force && historyLoadPromise) {
+    await historyLoadPromise;
     return;
   }
 
-  loadingHistory.value = true;
-  try {
-    const data = await $fetch<{
-      success?: boolean;
-      dates?: string[];
-      records?: HistoryRecord[];
-      message?: string;
-    }>('/api/run/history', {
-      method: 'POST',
-      body: {
-        session: {
-          stuNumber: session.value.stuNumber,
-          token: session.value.token,
-          schoolId: session.value.schoolId,
-          campusId: session.value.campusId,
-        },
-        startDate: sunrunPaper.value.startDate,
-        endDate: sunrunPaper.value.endDate,
-      },
-    });
-
-    const normalizedDates = Array.isArray(data?.dates)
-      ? Array.from(new Set(data.dates.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))))
-      : [];
-    completedDates.value = normalizedDates;
-
-    runHistoryRecords.value = Array.isArray(data?.records)
-      ? [...data.records].sort((a, b) => b.runTime.localeCompare(a.runTime))
-      : [];
-
-    if (data?.message) {
-      statusMessage.value = data.message;
+  const request = (async () => {
+    if (
+      !session.value?.stuNumber ||
+      !session.value?.token ||
+      !session.value?.schoolId ||
+      !sunrunPaper.value?.startDate ||
+      !sunrunPaper.value?.endDate
+    ) {
+      completedDates.value = [];
+      runHistoryRecords.value = [];
+      historyLoaded.value = false;
+      historyLoadFailed.value = false;
+      return;
     }
-  } catch (error) {
-    console.warn('[history] load failed', error);
-    completedDates.value = [];
-    runHistoryRecords.value = [];
+
+    loadingHistory.value = true;
+    historyLoadFailed.value = false;
+    try {
+      const data = await $fetch<{
+        success?: boolean;
+        dates?: string[];
+        records?: HistoryRecord[];
+        message?: string;
+      }>('/api/run/history', {
+        method: 'POST',
+        body: {
+          session: {
+            stuNumber: session.value.stuNumber,
+            token: session.value.token,
+            schoolId: session.value.schoolId,
+            campusId: session.value.campusId,
+          },
+          startDate: sunrunPaper.value.startDate,
+          endDate: sunrunPaper.value.endDate,
+        },
+      });
+
+      const normalizedDates = Array.isArray(data?.dates)
+        ? Array.from(new Set(data.dates.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))))
+        : [];
+      completedDates.value = normalizedDates;
+
+      runHistoryRecords.value = Array.isArray(data?.records)
+        ? [...data.records].sort((a, b) => b.runTime.localeCompare(a.runTime))
+        : [];
+      historyLoaded.value = Boolean(data?.success);
+      historyLoadFailed.value = data?.success === false;
+
+      if (data?.message) {
+        statusMessage.value = data.message;
+      }
+    } catch (error) {
+      console.warn('[history] load failed', error);
+      completedDates.value = [];
+      runHistoryRecords.value = [];
+      historyLoaded.value = false;
+      historyLoadFailed.value = true;
+    } finally {
+      loadingHistory.value = false;
+    }
+  })();
+
+  historyLoadPromise = request;
+
+  try {
+    await request;
   } finally {
-    loadingHistory.value = false;
+    if (historyLoadPromise === request) {
+      historyLoadPromise = null;
+    }
   }
 };
+
+const ensureHistoryLoaded = async () => {
+  await loadCompletedDates();
+  return historyLoaded.value;
+};
+
+const refreshHistory = async () => {
+  await loadCompletedDates({ force: true });
+};
+
+watch(
+  () => historyDialog.value,
+  (open) => {
+    if (open && !historyLoaded.value && !loadingHistory.value) {
+      void loadCompletedDates();
+    }
+  },
+);
 
 const buildJobPayload = (params: {
   customDate: string | null;
@@ -581,6 +640,12 @@ const submitBackfillJobs = async () => {
   const dates = [...selectedDates.value].sort();
   if (!dates.length) {
     statusMessage.value = '请至少选择 1 天';
+    return;
+  }
+
+  if (!(await ensureHistoryLoaded())) {
+    statusMessage.value = '运动记录加载失败，请稍后重试';
+    resultLog.value = '';
     return;
   }
 
@@ -665,6 +730,11 @@ const submitSunRunJob = async () => {
   submitted.value = false;
   taskIds.value = [];
 
+  if (!(await ensureHistoryLoaded())) {
+    statusMessage.value = '运动记录加载失败，请稍后重试';
+    return;
+  }
+
   if (hasOfficialRecordOnDate(todayStr.value)) {
     statusMessage.value = '今天已有龙猫运动记录，请勿重复提交';
     return;
@@ -718,9 +788,12 @@ const submitJobs = async () => {
 const init = async () => {
   if (!session.value?.token) {
     statusMessage.value = '请先登录';
+    loadingPaper.value = false;
     return;
   }
 
+  resetScannedState();
+  loadingPaper.value = true;
   try {
     const data = await TotoroApiWrapper.getSunRunPaper({
       token: session.value.token,
@@ -733,16 +806,30 @@ const init = async () => {
     selectValue.value = '';
     selectedDates.value = [];
     calendarMonthOffset.value = 0;
+    historyLoaded.value = false;
 
-    await Promise.all([fetchSunCredits(), fetchCredits()]);
-    await loadCompletedDates();
+    const hydrateSecondaryData = () => {
+      void Promise.allSettled([fetchSunCredits(), fetchCredits()]);
+      void loadCompletedDates();
+    };
+
+    if (process.client && typeof window !== 'undefined') {
+      window.setTimeout(hydrateSecondaryData, 0);
+    } else {
+      hydrateSecondaryData();
+    }
   } catch (error) {
+    resetScannedState();
     statusMessage.value = '获取路线失败';
     resultLog.value = (error as Error).message;
+  } finally {
+    loadingPaper.value = false;
   }
 };
 
-await init();
+onMounted(() => {
+  void init();
+});
 </script>
 
 <template>
@@ -775,7 +862,7 @@ await init();
       <div class="flex items-center justify-between gap-3">
         <div class="text-body-2 text-gray-600">路线</div>
         <div class="flex items-center gap-2">
-          <VBtn size="small" variant="text" @click="randomSelect">
+          <VBtn size="small" variant="text" :disabled="loadingPaper || !routeList.length" @click="randomSelect">
             随机路线
           </VBtn>
           <VBtn
@@ -783,6 +870,7 @@ await init();
             variant="flat"
             class="bg-[#e9dcff] text-[#5e34a4] font-semibold"
             :loading="loadingHistory"
+            :disabled="loadingPaper"
             @click="historyDialog = true"
           >
             查看记录
@@ -790,7 +878,14 @@ await init();
         </div>
       </div>
 
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div
+        v-if="loadingPaper"
+        class="rounded-md border border-dashed border-gray-300 bg-gray-50 p-4 text-sm text-gray-500"
+      >
+        正在加载路线和学期信息...
+      </div>
+
+      <div v-else class="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <VBtn
           v-for="routeItem in routeList"
           :key="routeItem.pointId"
@@ -814,7 +909,7 @@ await init();
       <div v-else-if="routeLockMissing && forcedRouteConfig" class="text-sm text-orange-700">
         当前账号应自动选择路线“{{ autoSelectedPointName }}”，但本次返回的路线列表中未找到，已保留手动选择。
       </div>
-      <div v-else-if="!routeChosen" class="text-sm text-orange-700">
+      <div v-else-if="!loadingPaper && !routeChosen" class="text-sm text-orange-700">
         请先点击选择一个路线，才能继续下面操作。
       </div>
     </div>
@@ -914,13 +1009,17 @@ await init();
       <VCard>
         <VCardTitle class="flex items-center justify-between gap-3">
           <span>运动记录</span>
-          <VBtn size="small" variant="text" :loading="loadingHistory" @click="loadCompletedDates">
+          <VBtn size="small" variant="text" :loading="loadingHistory" @click="refreshHistory">
             刷新
           </VBtn>
         </VCardTitle>
 
         <VCardText>
           <div v-if="loadingHistory" class="py-6 text-center text-gray-500">正在加载记录...</div>
+
+          <div v-else-if="historyLoadFailed" class="py-6 text-center text-gray-500">
+            记录加载失败，请刷新重试
+          </div>
 
           <div v-else-if="!runHistoryRecords.length" class="py-6 text-center text-gray-500">
             暂无记录
@@ -989,6 +1088,7 @@ await init();
       color="primary"
       size="large"
       :disabled="
+        loadingPaper ||
         !routeChosen ||
         isSubmitting ||
         (showBackfill && selectedCount === 0) ||
