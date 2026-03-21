@@ -85,7 +85,7 @@ const forcedRoute = computed<RunPoint | null>(
   () =>
     routeList.value.find((item) => item.pointName.trim() === autoSelectedPointName.value.trim()) || null,
 );
-const isRouteLocked = computed(() => Boolean(forcedRouteConfig.value && forcedRoute.value));
+const hasAutoSelectedRoute = computed(() => Boolean(forcedRouteConfig.value && forcedRoute.value));
 const routeLockMissing = computed(
   () => Boolean(forcedRouteConfig.value && !forcedRoute.value && routeList.value.length),
 );
@@ -95,10 +95,6 @@ const target = computed<RunPoint | null>(
 const routeChosen = computed(() => Boolean(target.value));
 
 const applySelectedRoute = (pointId: string) => {
-  if (isRouteLocked.value && forcedRoute.value) {
-    selectValue.value = forcedRoute.value.pointId;
-    return;
-  }
   selectValue.value = pointId;
 };
 
@@ -273,10 +269,6 @@ const displayStuName = computed(
 );
 
 const randomSelect = () => {
-  if (isRouteLocked.value && forcedRoute.value) {
-    selectValue.value = forcedRoute.value.pointId;
-    return;
-  }
   if (!routeList.value.length) return;
   const idx = Math.floor(Math.random() * routeList.value.length);
   selectValue.value = routeList.value[idx]!.pointId;
@@ -783,7 +775,7 @@ await init();
       <div class="flex items-center justify-between gap-3">
         <div class="text-body-2 text-gray-600">路线</div>
         <div class="flex items-center gap-2">
-          <VBtn size="small" variant="text" :disabled="isRouteLocked" @click="randomSelect">
+          <VBtn size="small" variant="text" @click="randomSelect">
             随机路线
           </VBtn>
           <VBtn
@@ -811,17 +803,16 @@ await init();
               : 'opacity-80'
           "
           :elevation="routeItem.pointId === selectValue ? 8 : 0"
-          :disabled="isRouteLocked"
           @click="applySelectedRoute(routeItem.pointId)"
         >
           {{ routeItem.pointName }}
         </VBtn>
       </div>
-      <div v-if="isRouteLocked && forcedRoute" class="text-sm text-emerald-700">
-        已根据学校和校区自动锁定路线：{{ forcedRoute.pointName }}
+      <div v-if="hasAutoSelectedRoute && forcedRoute" class="text-sm text-emerald-700">
+        已根据学校和校区自动选择路线，仍可手动修改：{{ forcedRoute.pointName }}
       </div>
       <div v-else-if="routeLockMissing && forcedRouteConfig" class="text-sm text-orange-700">
-        当前账号应自动锁定路线“{{ autoSelectedPointName }}”，但本次返回的路线列表中未找到，已保留手动选择。
+        当前账号应自动选择路线“{{ autoSelectedPointName }}”，但本次返回的路线列表中未找到，已保留手动选择。
       </div>
       <div v-else-if="!routeChosen" class="text-sm text-orange-700">
         请先点击选择一个路线，才能继续下面操作。
@@ -1021,7 +1012,7 @@ await init();
 
     <div v-if="sunrunPaper?.runPointList?.length" class="h-50vh w-full md:w-50vw">
       <ClientOnly>
-        <AMap :target="selectValue" :locked="isRouteLocked" @update:target="applySelectedRoute($event)" />
+        <AMap :target="selectValue" @update:target="applySelectedRoute($event)" />
       </ClientOnly>
     </div>
   </div>
