@@ -155,24 +155,9 @@ const TotoroApiWrapper = {
       .json<GetRunBeginResponse>();
   },
 
-  async getFreerunPaper(req: BasicRequest) {
-    return this.client
-      .post('sunrun/getFreerunPaper', { body: encryptRequestContent(req) })
-      .json();
-  },
-
   async sunRunExercises(req: SunRunExercisesRequest): Promise<SunRunExercisesResponse> {
     return this.client
       .post('platform/recrecord/sunRunExercises', {
-        body: encryptRequestContent(req),
-      })
-      .json();
-  },
-
-  async freeRunExercises(req: any): Promise<SunRunExercisesResponse> {
-    // 自由跑使用 recrecordNew/sunRunExercises，runType=1
-    return this.client
-      .post('platform/recrecordNew/sunRunExercises', {
         body: encryptRequestContent(req),
       })
       .json();

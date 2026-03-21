@@ -12,6 +12,5 @@ export default interface GetAppFrontPageResponse extends BaseResponse {
     avgPace: string;
     calorie: string;
   };
-  freeRunInfoVo: { totalMileage: string };
   mornsignInfoVo: { completedTimes: string };
 }

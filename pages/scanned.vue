@@ -34,6 +34,12 @@ const route = useRoute();
 const hydratedSession = computed(() => normalizeSession(session.value || {}));
 const SEMESTER_SUBMIT_GRACE_DAYS = 5;
 const SEMESTER_BLOCK_MESSAGE = '本学期已结束或新学期未开始，请等待新学期开始后再跑步';
+const AUTO_ROUTE_CONFIGS = [
+  { schoolId: 'cqifs', campusId: 'QJXQ', pointNames: ['綦江校区操场路线'] },
+  { schoolId: 'cqifs', campusId: 'YBXQ', pointNames: ['渝北校区操场路线'] },
+  { schoolId: '98765', campusId: '天目湖', pointNames: ['天目湖-东操场', '天目湖-西操场'] },
+  { schoolId: '98765', campusId: '将军路', pointNames: ['田径场 将军路', '图书馆 将军路'] },
+] as const;
 
 const selectValue = ref('');
 const showBackfill = ref(route.query.mode === 'backfill');
@@ -62,10 +68,39 @@ const taskIds = ref<number[]>([]);
 
 const supabaseEnabled = computed(() => supabaseReady && Boolean(supabase));
 const routeList = computed(() => sunrunPaper.value?.runPointList || []);
+const currentSchoolId = computed(() => hydratedSession.value?.schoolId || session.value?.schoolId || '');
+const currentCampusId = computed(() => hydratedSession.value?.campusId || session.value?.campusId || '');
+const autoSelectedPointName = ref('');
+const forcedRouteConfig = computed(
+  () =>
+    AUTO_ROUTE_CONFIGS.find(
+      (item) => item.schoolId === currentSchoolId.value && item.campusId === currentCampusId.value,
+    ) || null,
+);
+const pickAutoPointName = (pointNames: readonly string[]) =>
+  pointNames.length <= 1
+    ? pointNames[0] || ''
+    : pointNames[Math.floor(Math.random() * pointNames.length)] || '';
+const forcedRoute = computed<RunPoint | null>(
+  () =>
+    routeList.value.find((item) => item.pointName.trim() === autoSelectedPointName.value.trim()) || null,
+);
+const isRouteLocked = computed(() => Boolean(forcedRouteConfig.value && forcedRoute.value));
+const routeLockMissing = computed(
+  () => Boolean(forcedRouteConfig.value && !forcedRoute.value && routeList.value.length),
+);
 const target = computed<RunPoint | null>(
   () => routeList.value.find((item) => item.pointId === selectValue.value) || null,
 );
 const routeChosen = computed(() => Boolean(target.value));
+
+const applySelectedRoute = (pointId: string) => {
+  if (isRouteLocked.value && forcedRoute.value) {
+    selectValue.value = forcedRoute.value.pointId;
+    return;
+  }
+  selectValue.value = pointId;
+};
 
 watch(
   () => route.query.mode,
@@ -238,10 +273,38 @@ const displayStuName = computed(
 );
 
 const randomSelect = () => {
+  if (isRouteLocked.value && forcedRoute.value) {
+    selectValue.value = forcedRoute.value.pointId;
+    return;
+  }
   if (!routeList.value.length) return;
   const idx = Math.floor(Math.random() * routeList.value.length);
   selectValue.value = routeList.value[idx]!.pointId;
 };
+
+watch(
+  [routeList, forcedRouteConfig],
+  () => {
+    if (forcedRouteConfig.value) {
+      const pointNames = forcedRouteConfig.value.pointNames as readonly string[];
+      if (!pointNames.includes(autoSelectedPointName.value)) {
+        autoSelectedPointName.value = pickAutoPointName(forcedRouteConfig.value.pointNames);
+      }
+    } else {
+      autoSelectedPointName.value = '';
+    }
+
+    if (forcedRoute.value) {
+      selectValue.value = forcedRoute.value.pointId;
+      return;
+    }
+
+    if (selectValue.value && !routeList.value.some((item) => item.pointId === selectValue.value)) {
+      selectValue.value = '';
+    }
+  },
+  { immediate: true },
+);
 
 const toggleDate = (iso: string, disabled: boolean) => {
   if (!iso || disabled) return;
@@ -720,7 +783,9 @@ await init();
       <div class="flex items-center justify-between gap-3">
         <div class="text-body-2 text-gray-600">路线</div>
         <div class="flex items-center gap-2">
-          <VBtn size="small" variant="text" @click="randomSelect">随机路线</VBtn>
+          <VBtn size="small" variant="text" :disabled="isRouteLocked" @click="randomSelect">
+            随机路线
+          </VBtn>
           <VBtn
             size="small"
             variant="flat"
@@ -746,12 +811,21 @@ await init();
               : 'opacity-80'
           "
           :elevation="routeItem.pointId === selectValue ? 8 : 0"
-          @click="selectValue = routeItem.pointId"
+          :disabled="isRouteLocked"
+          @click="applySelectedRoute(routeItem.pointId)"
         >
           {{ routeItem.pointName }}
         </VBtn>
       </div>
-      <div v-if="!routeChosen" class="text-sm text-orange-700">请先点击选择一个路线，才能继续下面操作。</div>
+      <div v-if="isRouteLocked && forcedRoute" class="text-sm text-emerald-700">
+        已根据学校和校区自动锁定路线：{{ forcedRoute.pointName }}
+      </div>
+      <div v-else-if="routeLockMissing && forcedRouteConfig" class="text-sm text-orange-700">
+        当前账号应自动锁定路线“{{ autoSelectedPointName }}”，但本次返回的路线列表中未找到，已保留手动选择。
+      </div>
+      <div v-else-if="!routeChosen" class="text-sm text-orange-700">
+        请先点击选择一个路线，才能继续下面操作。
+      </div>
     </div>
 
     <VCard v-if="!showBackfill" class="p-3 space-y-2" variant="tonal">
@@ -947,7 +1021,7 @@ await init();
 
     <div v-if="sunrunPaper?.runPointList?.length" class="h-50vh w-full md:w-50vw">
       <ClientOnly>
-        <AMap :target="selectValue" @update:target="selectValue = $event" />
+        <AMap :target="selectValue" :locked="isRouteLocked" @update:target="applySelectedRoute($event)" />
       </ClientOnly>
     </div>
   </div>

@@ -2,7 +2,7 @@
 import AMapLoader from '@amap/amap-jsapi-loader';
 import generateRoute from '~/src/utils/generateRoute';
 
-const props = defineProps<{ target: string }>();
+const props = defineProps<{ target: string; locked?: boolean }>();
 const emit = defineEmits<{ (e: 'update:target', target: string): void }>();
 const containerRef = ref<HTMLDivElement | null>(null);
 const sunrunPaper = useSunRunPaper();
@@ -48,22 +48,33 @@ const updateLine = () => {
       text: pointName,
       value: pointId,
       anchor: 'center', // 设置文本标记锚点
-      cursor: 'pointer',
+      cursor: props.locked ? 'default' : 'pointer',
       angle: 0,
       position: [route.longitude, route.latitude],
       style: {
         'font-family': '"Roboto", "Helvetica", "Arial", "sans-serif"',
       },
     });
-    marker.on('click', (event: { target: { _originOpts: { value: string } } }) => {
-      emit('update:target', event.target._originOpts.value);
-    });
+    if (!props.locked) {
+      marker.on('click', (event: { target: { _originOpts: { value: string } } }) => {
+        emit('update:target', event.target._originOpts.value);
+      });
+    }
     map.value.add(marker);
   });
 };
 
 watch(
   () => props.target,
+  () => {
+    if (!sunrunPaper.value) return;
+    if (!map.value) return;
+    updateLine();
+  },
+);
+
+watch(
+  () => props.locked,
   () => {
     if (!sunrunPaper.value) return;
     if (!map.value) return;
